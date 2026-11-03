@@ -1,0 +1,23 @@
+[project]
+name = "kartstudy"
+version = "0.1.0"
+authors = [
+    { name = "BshKatrin", email = "dyanko.ekaterina2015@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "pystk2-gymnasium==0.10.0",
+    "rl-mind==0.4.0",
+    "scipy>=1.18.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
