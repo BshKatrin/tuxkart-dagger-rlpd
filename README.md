@@ -34,6 +34,8 @@ available compute; the implementation differences are documented in the protocol
 
 ## Explore the project
 
+- [Watch the trained policies](docs/visualization.md)
+- [Download the experiment data](docs/experiment-data.md)
 - [Project brief](TASK.md)
 - [Initial experiments](docs/initial-experiments.md)
 - [Development and experiment commands](AGENTS.md)

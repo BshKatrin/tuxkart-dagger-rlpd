@@ -56,6 +56,26 @@ training/evaluation logs, final trajectories, and rolling checkpoint. The suite'
 `manifest.json` records worker PIDs and queue state. Summaries can include partial
 runs; restrict final analysis to completed runs at matched budgets.
 
+## Policy visualization
+
+`uv run python -m kartstudy.playback` opens the native viewer; see
+[docs/visualization.md](docs/visualization.md) for controls and recording.
+Playback uses the shared task wrapper and deterministic CPU inference at the
+original 0.1-second action interval. Speed controls affect wall time only.
+Keep Tk and the SDL/OpenGL simulator in separate processes on macOS; combining
+their Cocoa application objects in one process crashes. The viewer discovers
+completed checkpoints from run metadata. Outputs belong under ignored `runs/`.
+Fresh rendering can introduce tiny floating-point differences from headless
+evaluation. Preserve official evaluation logs; never replace them with video metadata.
+
+## Sharing experiment artifacts
+
+Keep `data/`, `runs/`, and `dist/` out of Git history. Publish completed snapshots
+as GitHub Release assets using `scripts/package_results.py`; restoration and
+archive contents are documented in [docs/experiment-data.md](docs/experiment-data.md).
+Preserve the original run files and source archive. Do not overwrite a published
+snapshot; use a new release tag for changed data.
+
 ## Protect running work
 
 Do not overwrite datasets or change experiment code under an active suite:

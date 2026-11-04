@@ -66,10 +66,30 @@ def decode_action(action):
 
 
 class DrivingEnv:
-    def __init__(self, track="lighthouse", max_steps=1500, perturb=False):
+    def __init__(
+        self,
+        track="lighthouse",
+        max_steps=1500,
+        perturb=False,
+        render=False,
+        width=960,
+        height=540,
+    ):
         self.track = track
         self.max_steps = max_steps
         self.perturb = perturb
+        graphics = {}
+        if render:
+            import pystk2
+
+            config = pystk2.GraphicsConfig.sd()
+            config.display = False
+            config.screen_width, config.screen_height = width, height
+            graphics = {
+                "render_mode": "human",
+                "graphics_config": config,
+                "num_cameras": 1,
+            }
         self.env = gym.make(
             "supertuxkart/full-v0",
             track=track,
@@ -80,6 +100,7 @@ class DrivingEnv:
             step_size=0.1,
             max_episode_steps=max_steps,
             agent=AgentSpec(name="study", rank_start=0, use_ai=False),
+            **graphics,
         )
         self.experts = {False: Expert(), True: Expert(conservative=True)}
         self.raw = None

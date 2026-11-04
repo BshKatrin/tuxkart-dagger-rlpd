@@ -777,7 +777,9 @@ name = "kartstudy"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "imageio-ffmpeg" },
     { name = "numpy" },
+    { name = "pillow" },
     { name = "pystk2-gymnasium" },
     { name = "rl-mind" },
     { name = "scipy" },
@@ -791,7 +793,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "imageio-ffmpeg", specifier = ">=0.8.1" },
     { name = "numpy", specifier = ">=2.5.4" },
+    { name = "pillow", specifier = ">=11.3.0" },
     { name = "pystk2-gymnasium", specifier = "==0.10.0" },
     { name = "rl-mind", specifier = "==0.4.0" },
     { name = "scipy", specifier = ">=1.18.1" },

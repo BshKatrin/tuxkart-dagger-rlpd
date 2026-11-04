@@ -55,7 +55,9 @@ task selection and must be disclosed.
 Episodes 0–19 are training; 20–21 are validation, excluded from both imitation
 and RL replay. Small-data condition takes episodes 0–1. Solo simulation is
 deterministic, so independent seeded Gaussian control noise (steer std 0.035,
-normalized throttle std 0.02) broadens state coverage. RL transitions retain
+normalized throttle std 0.02) broadens state coverage. The expert itself remains deterministic; this noise
+is applied only during collection, not ordinary evaluation or playback.
+RL transitions retain
 executed noisy actions; imitation targets retain the clean expert query at the
 same state. All collected laps must finish before the collector accepts the
 file. SHA-256 and episode metadata are saved beside each dataset.
