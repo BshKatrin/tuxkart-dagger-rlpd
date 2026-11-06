@@ -1,17 +1,9 @@
 """Fixed learner split. Difficulty is reporting metadata, never a policy input."""
 
 TRAIN_GROUPS = {
-    "simple": (
-        "lighthouse",
-        "xr591",
-        "scotland",
-        "sandtrack",
-        "gran_paradiso_island",
-        "snowtuxpeak",
-        "cornfield_crossing",
-    ),
-    "medium": ("black_forest", "olivermath"),
-    "hard": ("zengarden", "stk_enterprise", "minigolf"),
+    "simple": ("lighthouse", "cornfield_crossing"),
+    "medium": ("black_forest",),
+    "hard": ("stk_enterprise",),
 }
 HELD_OUT_GROUPS = {
     "simple": ("abyss", "candela_city", "cocoa_temple", "hacienda", "volcano_island"),

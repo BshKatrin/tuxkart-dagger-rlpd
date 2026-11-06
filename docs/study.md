@@ -1,24 +1,25 @@
 # Study protocol — shared policies, schema 3
 
 Compare BC, DAgger, online SAC, and RLPD with five independent training seeds
-(0–4). Each run learns one feedforward policy shared across all 12 training
+(0–4). Each run learns one feedforward policy shared across all four training
 tracks. Track names and difficulty are not policy inputs. Difficulty is used
 only to group reported results. This protocol replaces the
 [three-track schema 2 protocol](protocols/study-schema2.md); existing artifacts
-and source snapshots remain unchanged.
+and source snapshots remain unchanged. The [12-track revision](protocols/study-twelve-tracks.md)
+was superseded to reduce compute; its runs are excluded from this study.
 
 ## Track split
 
 | Difficulty | Training | Held out from learner training |
 |---|---|---|
-| Simple | Lighthouse, XR591, Nessie's Pond, Shifting Sands, Gran Paradiso Island, Snow Peak, Cornfield Crossing | Antediluvian Abyss, Candela City, Cocoa Temple, Hacienda, Volcan Island |
-| Medium | Black Forest, OliverMathClass | Old Mine, Northern Resort |
-| Hard | Zen Garden, STK Enterprise, Minigolf | Ravenbridge Mansion, Fort Magma |
+| Simple | Lighthouse, Cornfield Crossing | Antediluvian Abyss, Candela City, Cocoa Temple, Hacienda, Volcan Island |
+| Medium | Black Forest | Old Mine, Northern Resort |
+| Hard | STK Enterprise | Ravenbridge Mansion, Fort Magma |
 
 The [track mapping](../src/kartstudy/tracks.py) fixes the simulator IDs, including
-`scotland` (Nessie's Pond), `sandtrack` (Shifting Sands), `snowtuxpeak` (Snow Peak),
-`mines` (Old Mine), and `snowmountain` (Northern Resort). The split covers all 21
-installed standard race tracks. Held-out tracks have been inspected when
+`mines` (Old Mine) and `snowmountain` (Northern Resort). The study uses four
+training and nine held-out tracks. The eight other standard tracks are unused
+in this revision. Held-out tracks have been inspected when
 qualifying the expert; they are held out from learner training, rather than
 untouched throughout study design. They supply no demonstrations, replay,
 DAgger labels, fitting data, or model-selection feedback.
@@ -57,13 +58,15 @@ Reward remains signed progress / 10 − 0.1 per action + 10 on completion.
 
 Qualify the expert on every training track before collection. Collect 22
 noise-free expert laps per training track, using seeds 1000–1021. Within each
-track, the first 20 laps train and the last two validate: 240 training and 24
+track, the first 20 laps train and the last two validate: 80 training and eight
 validation laps in one pooled dataset. Validation episode IDs are explicitly
 excluded from replay and imitation updates. Executed actions equal cached
 expert labels. Metadata records tracks, split, expert, schema and checksum.
+The fresh four-track dataset is an exact subset of the original noise-free collection, with original
+episode IDs and parent-dataset checksum retained; no checkpoints are reused.
 Every lap must complete; failures stop collection rather than being discarded.
 
-Every online run receives exactly 1,200,000 actions: 100,000 on each training
+Every online run receives exactly 400,000 actions: 100,000 on each training
 track. At an episode boundary, select the training track with the fewest actions
 so far (ties follow the fixed track order). End a collection episode at its
 track's exact quota; this is a sampling boundary, not a terminal Bellman target.
@@ -74,10 +77,10 @@ transitions. The same pooled demonstrations initialize BC and DAgger.
 
 The MLPs retain two hidden layers of width 128, batch size 256, learning rate
 0.0003 and discount 0.99. To preserve the previous fitting and collection budget
-per track, multiply the former per-track budgets by 12: BC fits 24,000 updates;
-DAgger starts with BC, then uses 24,000-action rounds with 6,000 supervised
+per track, multiply the former per-track budgets by four: BC fits 8,000 updates;
+DAgger starts with BC, then uses 8,000-action rounds with 2,000 supervised
 updates per round and expert execution probability `0.5 × 0.5^round`.
-Reward learners collect 32-action chunks and use 12,000 warmup actions.
+Reward learners collect 32-action chunks and use 4,000 warmup actions.
 SAC uses two critics and one critic update per action. RLPD uses ten critics,
 critic layer normalization, and four critic updates per action. Both update the
 actor once per action after warmup. This suite omits the separate SAC symmetric
@@ -87,8 +90,8 @@ components.
 ## Evaluation and reporting
 
 Use deterministic CPU snapshots, four fixed evaluation seeds 20000–20003 per
-track. Evaluate training tracks every 120,000 online actions. Evaluate all 21
-tracks at the fixed final budget; BC is evaluated after fitting. Held-out
+track. Evaluate training tracks every 40,000 online actions. Evaluate all 13
+study tracks at the fixed final budget; BC is evaluated after fitting. Held-out
 results do not select checkpoints or tune the methods. Final trajectories are
 saved separately per track. Training uses Metal; simulation and inference use
 CPU, with one native simulator per worker process.

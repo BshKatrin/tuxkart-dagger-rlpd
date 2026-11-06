@@ -5,7 +5,7 @@ uv run python -m kartstudy.expert_evaluation \
   --output runs/expert-metrics/metrics.json
 ```
 
-The original Team 4 coordinator drives one lap per seed 0–3 on all 12 training
+The original Team 4 coordinator drives one lap per seed 0–3 on all four training
 tracks. The shared five controls execute; drift and explicit rescue stay off. There is no
 added action noise. Native simulator seeds can affect powerups and trajectories.
 Override `--tracks` or `--seeds` when needed; output paths must be fresh.

@@ -419,6 +419,7 @@ def run(config, out):
 
 
 def defaults():
+    n_tracks = len(TRAIN_TRACKS)
     return {
         "algo": "sac",
         "seed": 0,
@@ -426,21 +427,21 @@ def defaults():
         "tracks": list(TRAIN_TRACKS),
         "steps_per_track": 100000,
         "max_steps": 1500,
-        "dataset": "data/team4-polar-v3/demonstrations.npz",
+        "dataset": "data/team4-polar-four/demonstrations.npz",
         "demo_episodes": 20,
         "schema_version": SCHEMA_VERSION,
-        "steps": 1200000,
+        "steps": 100000 * n_tracks,
         "hidden": 128,
         "batch_size": 256,
         "lr": 3e-4,
         "gamma": 0.99,
-        "eval_every": 120000,
+        "eval_every": 10000 * n_tracks,
         "collect_steps": 32,
-        "warmup": 12000,
+        "warmup": 1000 * n_tracks,
         "utd": 1,
-        "bc_updates": 24000,
-        "dagger_round": 24000,
-        "dagger_updates": 6000,
+        "bc_updates": 2000 * n_tracks,
+        "dagger_round": 2000 * n_tracks,
+        "dagger_updates": 500 * n_tracks,
         "beta_initial": 0.5,
         "beta_decay": 0.5,
     }

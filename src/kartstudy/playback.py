@@ -62,7 +62,7 @@ def load_actor(path):
 
 
 class Playback:
-    def __init__(self, root="runs/study-polar-v3", width=960, height=540):
+    def __init__(self, root="runs/study-polar-four", width=960, height=540):
         torch.set_num_threads(1)
         self.root, self.width, self.height = Path(root), width, height
         self.catalog = discover_runs(root)
@@ -217,7 +217,7 @@ def _render_worker(connection, root, width, height):
 class RemotePlayback:
     """Isolate SDL/OpenGL from Tk's Cocoa application on macOS."""
 
-    def __init__(self, root="runs/study-polar-v3", width=960, height=540):
+    def __init__(self, root="runs/study-polar-four", width=960, height=540):
         import multiprocessing as mp
 
         self.root, self.width, self.height = root, width, height
@@ -351,7 +351,7 @@ def record(playback, output, limit_steps=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", default="runs/study-polar-v3")
+    parser.add_argument("--root", default="runs/study-polar-four")
     parser.add_argument("--policy", choices=METHODS, default="expert")
     parser.add_argument("--train-seed", type=int, default=0)
     parser.add_argument("--eval-seed", type=int, default=20000)

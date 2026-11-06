@@ -4,7 +4,7 @@ How should a driving agent learn from an expert: by asking for corrections as
 it drives, or by combining demonstrations with its own experience?
 
 We compare behavior cloning, DAgger, online SAC, and RLPD in solo SuperTuxKart
-driving. Each policy learns across 12 training tracks; nine held-out tracks test
+driving. Each policy learns across four training tracks; nine held-out tracks test
 generalization. Difficulty groups are used only for reporting. Evaluation uses
 normal driving only.
 

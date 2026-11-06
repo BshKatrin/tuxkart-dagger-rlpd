@@ -52,7 +52,7 @@ def create_archive(path, files):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("dist/study"))
-    parser.add_argument("--root", type=Path, default=Path("runs/study-polar-v3"))
+    parser.add_argument("--root", type=Path, default=Path("runs/study-polar-four"))
     args = parser.parse_args()
     root = args.root
     manifest = json.loads((root / "manifest.json").read_text())

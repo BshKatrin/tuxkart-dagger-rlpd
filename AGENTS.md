@@ -41,9 +41,9 @@ Qualify the expert before collecting data. The collector requires every lap to
 finish and refuses to overwrite an existing dataset.
 
 ```sh
-uv run python scripts/qualify_expert.py --output runs/qualification-polar-v3/metrics.json
-uv run python -m kartstudy.data --output data/team4-polar-v3/demonstrations.npz
-uv run python scripts/run_suite.py --output runs/study-polar-v3 --workers 2
+uv run python scripts/qualify_expert.py --output runs/qualification-polar-four/metrics.json
+uv run python -m kartstudy.data --output data/team4-polar-four/demonstrations.npz
+uv run python scripts/run_suite.py --output runs/study-polar-four --workers 2
 ```
 
 The suite launcher generates configurations, bounds concurrency, saves a source
@@ -52,8 +52,8 @@ for each suite. Inspect the actual worker configuration and dataset metadata
 before interpreting a result; the study protocol describes the intended comparison.
 
 ```sh
-uv run python scripts/status.py runs/study-polar-v3
-uv run python scripts/summarize.py runs/study-polar-v3
+uv run python scripts/status.py runs/study-polar-four
+uv run python scripts/summarize.py runs/study-polar-four
 ```
 
 Generated datasets and runs are Git-ignored. Dataset metadata records the split,
@@ -92,7 +92,7 @@ of training; preserve the suite's original source archive.
 To stop launching queued jobs while letting active workers finish:
 
 ```sh
-touch runs/study-polar-v3/STOP
+touch runs/study-polar-four/STOP
 ```
 
 To stop active workers too, send SIGTERM to the suite PID recorded in its

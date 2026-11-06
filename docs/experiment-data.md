@@ -6,7 +6,7 @@ training/evaluation logs, trajectories, and checkpoints. Dataset metadata record
 training tracks, expert, schema, checksum, and training/validation split.
 
 ```sh
-uv run python scripts/package_results.py --root runs/study-polar-v3 --output dist/study
+uv run python scripts/package_results.py --root runs/study-polar-four --output dist/study
 ```
 
 Package only completed suites. Archives include the exact datasets referenced by

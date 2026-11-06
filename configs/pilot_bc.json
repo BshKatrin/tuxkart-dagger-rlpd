@@ -3,7 +3,7 @@
   "seed": 0,
   "device": "mps",
   "max_steps": 1500,
-  "dataset": "data/pilot-polar-v3/demonstrations.npz",
+  "dataset": "data/pilot-polar-four/demonstrations.npz",
   "demo_episodes": 20,
   "steps": 3000,
   "hidden": 128,
@@ -22,7 +22,7 @@
   "schema_version": 3,
   "tracks": [
     "lighthouse",
-    "zengarden"
+    "stk_enterprise"
   ],
   "steps_per_track": 1500
 }

@@ -156,7 +156,7 @@ def test_shared_training_enforces_track_quotas_and_excludes_validation_and_evalu
     from kartstudy.expert import Expert
     from kartstudy.tracks import HELD_OUT_TRACKS, track_group
 
-    tracks = ["lighthouse", "zengarden"]
+    tracks = ["lighthouse", "stk_enterprise"]
     path = tmp_path / "demonstrations.npz"
     # Each track has one training episode and two validation episodes.
     observations = np.zeros((6, 84), np.float32)

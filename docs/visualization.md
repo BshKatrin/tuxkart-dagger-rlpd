@@ -2,7 +2,7 @@
 
 ```sh
 uv run python -m kartstudy.playback --policy expert
-uv run python -m kartstudy.playback --root runs/study-polar-v3 --policy dagger --track zengarden
+uv run python -m kartstudy.playback --root runs/study-polar-four --policy dagger --track zengarden
 ```
 
 Select the track, policy, and training seed. Only completed compatible checkpoints

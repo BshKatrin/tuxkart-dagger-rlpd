@@ -16,7 +16,7 @@ def test_playback_catalog_requires_completed_checkpoint_and_unique_training_run(
         "algo": "dagger",
         "seed": 2,
         "demo_episodes": 20,
-        "tracks": ["zengarden"],
+        "tracks": ["stk_enterprise"],
         "schema_version": SCHEMA_VERSION,
     }
     run = tmp_path / "run"

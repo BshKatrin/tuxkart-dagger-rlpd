@@ -35,11 +35,11 @@ def experiment_specs(dataset=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="runs/study-polar-v3")
+    parser.add_argument("--output", default="runs/study-polar-four")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--dataset", default=defaults()["dataset"])
     parser.add_argument(
-        "--qualification", default="runs/qualification-polar-v3/metrics.json"
+        "--qualification", default="runs/qualification-polar-four/metrics.json"
     )
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
@@ -146,13 +146,23 @@ def main():
                     continue
                 log.close()
                 job = next(j for j in jobs if j["name"] == name)
+                status_file = Path(job["output"]) / "status.json"
+                worker_status = (
+                    json.loads(status_file.read_text()).get("status")
+                    if status_file.exists()
+                    else None
+                )
                 job.update(
-                    state="completed" if code == 0 else "failed",
+                    state="completed"
+                    if code == 0 and worker_status == "completed"
+                    else "stopped"
+                    if code == 0
+                    else "failed",
                     returncode=code,
                     finished_at=dt.datetime.now(dt.UTC).isoformat(),
                 )
                 del active[name]
-                if code != 0:
+                if code != 0 or worker_status != "completed":
                     stop = True
                     print(
                         f"Failed {name}: exit {code}; stopping queue. See log.",
