@@ -10,6 +10,8 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from kartstudy.environment import SCHEMA_VERSION
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -49,9 +51,10 @@ def create_archive(path, files):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("dist/initial-experiments"))
+    parser.add_argument("--output", type=Path, default=Path("dist/study"))
+    parser.add_argument("--root", type=Path, default=Path("runs/study-polar-v3"))
     args = parser.parse_args()
-    root = Path("runs/study")
+    root = args.root
     manifest = json.loads((root / "manifest.json").read_text())
     if manifest["state"] != "completed" or any(
         j["state"] != "completed" for j in manifest["jobs"]
@@ -70,21 +73,20 @@ def main():
         ):
             raise ValueError(f"Incomplete run: {run}")
     # An explicit allowlist excludes pilots, videos, live viewer state and unrelated local files.
-    datasets = sorted(
-        p for p in Path("data").glob("*") if p.suffix in [".npz", ".json"]
-    )
+    datasets = []
+    for job in manifest["jobs"]:
+        config = json.loads(Path(job["config"]).read_text())
+        if config.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Incompatible suite schema")
+        dataset = Path(config["dataset"])
+        datasets.extend([dataset, dataset.with_suffix(".json")])
+    datasets = sorted(set(datasets))
     metadata = [
-        root / name for name in ["manifest.json", "hardware.json", "source.tar.gz"]
+        root / name for name in ["manifest.json", "source.tar.gz", "qualification.json"]
     ]
-    qualification = Path("runs/expert_qualification.json")
-    if qualification.exists():
-        metadata.append(qualification)
     run_files = []
     checkpoints = []
     run_directories = [Path(j["output"]) for j in manifest["jobs"]]
-    run_directories += [
-        root / name for name in ["expert_reference", "expert_conservative"]
-    ]
     for run in run_directories:
         for source in sorted(run.glob("*")):
             if not source.is_file():
@@ -95,8 +97,8 @@ def main():
                 run_files.append(source)
     args.output.mkdir(parents=True, exist_ok=True)
     groups = [
-        ("initial-experiments-data.zip", datasets + metadata + run_files),
-        ("initial-experiments-checkpoints.zip", checkpoints),
+        ("study-data.zip", datasets + metadata + run_files),
+        ("study-checkpoints.zip", checkpoints),
     ]
     if any((args.output / name).exists() for name, _ in groups):
         raise FileExistsError(
@@ -111,7 +113,7 @@ def main():
     checksums = "".join(f"{asset['sha256']}  {asset['name']}\n" for asset in assets)
     (args.output / "SHA256SUMS").write_text(checksums)
     description = {
-        "suite": "initial-experiments",
+        "suite": str(root),
         "completed_runs": len(manifest["jobs"]),
         "packaging_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True

@@ -1,0 +1,10 @@
+/*
+!/AGENTS.md
+!/.gitignore
+!/scripts/
+/generated/
+*.tex
+*.bib
+*.sty
+*.cls
+*.bst

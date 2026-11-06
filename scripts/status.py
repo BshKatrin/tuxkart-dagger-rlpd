@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
-parser.add_argument("root", nargs="?", default="runs/study")
+parser.add_argument("root", nargs="?", default="runs/study-polar-v3")
 args = parser.parse_args()
 root = Path(args.root)
 manifest = json.loads((root / "manifest.json").read_text())

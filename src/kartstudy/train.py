@@ -19,9 +19,10 @@ from rl_mind.core import Action
 from rl_mind.data import ReplayBuffer, Transitions
 
 from .algorithms import SAC, Policy, fit_imitation, symmetric_sample
-from .data import dataset_hash, load_transitions
-from .environment import DrivingEnv
+from .data import dataset_hash, load_transitions, training_mask, validate_dataset
+from .environment import ACTION_DIM, SCHEMA_VERSION, DrivingEnv
 from .evaluation import evaluate
+from .tracks import HELD_OUT_TRACKS, TRAIN_TRACKS, track_group
 
 
 def write_json(path, value):
@@ -45,7 +46,22 @@ def seed_all(seed):
     torch.set_num_threads(1)
 
 
+def next_training_track(counts, budget):
+    eligible = [track for track, count in counts.items() if count < budget]
+    return min(eligible, key=counts.get) if eligible else None
+
+
 def run(config, out):
+    if config.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("Incompatible training configuration")
+    tracks = config["tracks"]
+    if (
+        not tracks
+        or len(set(tracks)) != len(tracks)
+        or not set(tracks) <= set(TRAIN_TRACKS)
+        or config["steps"] != config["steps_per_track"] * len(tracks)
+    ):
+        raise ValueError("Require training-only tracks and an exact per-track budget")
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
     seed_all(config["seed"])
@@ -88,27 +104,23 @@ def run(config, out):
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    env = DrivingEnv(track=config["track"], max_steps=config["max_steps"])
+    env = DrivingEnv(track=tracks[0], max_steps=config["max_steps"])
+    track_steps = dict.fromkeys(tracks, 0)
     steps = updates = expert_queries = eval_steps = episodes = 0
     algo = config["algo"]
-    if algo not in ["bc", "dagger", "sac", "sac_sym", "rlpd"]:
+    if algo not in ["bc", "dagger", "sac", "rlpd"]:
         raise ValueError(f"Unknown algorithm: {algo}")
     offline = online = learner = None
     labels_obs = labels_actions = None
     obs, _ = env.reset(seed=config["seed"])
     actor = Policy(len(obs), hidden=config["hidden"]).to(device)
     optimizer = torch.optim.Adam(actor.parameters(), lr=config["lr"])
-    metadata = json.loads(Path(config["dataset"]).with_suffix(".json").read_text())
-    if (
-        metadata["track"] != config["track"]
-        or metadata["conservative"] != config["conservative"]
-    ):
-        raise ValueError("Dataset track/expert does not match experiment configuration")
-    if not 1 <= config["demo_episodes"] <= len(metadata["train_episode_ids"]):
-        raise ValueError("Demonstration episode budget overlaps validation or is empty")
+    metadata = validate_dataset(
+        config["dataset"], tracks, config["demo_episodes"], config["max_steps"]
+    )
     initial = load_transitions(config["dataset"], config["demo_episodes"])
     with np.load(config["dataset"]) as data:
-        mask = data["episode"] < config["demo_episodes"]
+        mask = training_mask(data, metadata, config["demo_episodes"])
         initial_labels = torch.from_numpy(data["expert_action"][mask])
         val_mask = np.isin(data["episode"], metadata["validation_episode_ids"])
         val_obs = torch.from_numpy(data["obs"][val_mask]).to(device)
@@ -127,6 +139,7 @@ def run(config, out):
     def save_state(status):
         state = {
             "config": config,
+            "track_steps": track_steps,
             "step": steps,
             "updates": updates,
             "expert_queries": expert_queries,
@@ -143,10 +156,15 @@ def run(config, out):
         }
         torch.save(state, out / "checkpoint.tmp")
         (out / "checkpoint.tmp").replace(out / "checkpoint.pt")
+        record_status(status)
+
+    def record_status(status, phase="training"):
         write_json(
             out / "status.json",
             {
                 "status": status,
+                "phase": phase,
+                "track_steps": track_steps,
                 "step": steps,
                 "updates": updates,
                 "expert_queries": expert_queries,
@@ -167,38 +185,49 @@ def run(config, out):
             torch.get_rng_state(),
         )
         try:
-            conditions = ["normal", "perturbed"] + (
-                ["transfer_snowtuxpeak"] if final else []
+            records = []
+            evaluation_tracks = list(tracks)
+            if final:
+                evaluation_tracks += [
+                    track for track in HELD_OUT_TRACKS if track not in tracks
+                ]
+            for track in evaluation_tracks:
+                env.track = track
+                env.env.unwrapped.default_track = track
+                episodes_records = evaluate(
+                    env,
+                    policy,
+                    range(20000, 20004),
+                    "cpu",
+                    trajectory_path=out / f"trajectories_{track}.npz"
+                    if final
+                    else None,
+                )
+                split, difficulty = track_group(track)
+                records.extend(
+                    dict(row, track=track, split=split, difficulty=difficulty)
+                    for row in episodes_records
+                )
+            eval_steps += sum(r["steps"] for r in records)
+            append_json(
+                out / "evaluations.jsonl",
+                {
+                    "step": steps,
+                    "final": final,
+                    "episodes": records,
+                    "expert_queries": expert_queries,
+                    "updates": updates,
+                    "wall_seconds": time.perf_counter() - start,
+                },
             )
-            for condition in conditions:
-                env.env.unwrapped.default_track = (
-                    "snowtuxpeak"
-                    if condition == "transfer_snowtuxpeak"
-                    else config["track"]
-                )
-                seeds = range(20000, 20000 + (10 if final else 3))
-                traces = out / f"trajectories_{condition}.npz" if final else None
-                records = evaluate(
-                    env, policy, seeds, "cpu", condition == "perturbed", traces
-                )
-                eval_steps += sum(r["steps"] for r in records)
-                append_json(
-                    out / "evaluations.jsonl",
-                    {
-                        "step": steps,
-                        "condition": condition,
-                        "episodes": records,
-                        "expert_queries": expert_queries,
-                        "updates": updates,
-                        "wall_seconds": time.perf_counter() - start,
-                    },
-                )
         finally:
-            env.env.unwrapped.default_track = config["track"]
             random.setstate(rng_py)
             np.random.set_state(rng_np)
             torch.set_rng_state(rng_torch)
 
+    record_status(
+        "running", "fitting" if algo in ["bc", "dagger"] else "initial_evaluation"
+    )
     try:
         if algo in ["bc", "dagger"]:
             labels_obs, labels_actions = initial.obs.clone(), initial_labels.clone()
@@ -238,7 +267,17 @@ def run(config, out):
                 offline = ReplayBuffer(len(initial))
                 offline.add(initial)
             assessment()
-        obs, _ = env.reset(seed=config["seed"] * 100000 + episodes)
+
+        def reset_training():
+            nonlocal episodes
+            track = next_training_track(track_steps, config["steps_per_track"])
+            episodes += 1
+            observation, _ = env.reset(
+                seed=1000000 + config["seed"] * 100000 + episodes, track=track
+            )
+            return observation
+
+        obs = reset_training()
         next_eval = config["eval_every"]
         round_index = 0
         rng = np.random.default_rng(config["seed"])
@@ -255,16 +294,17 @@ def run(config, out):
             new_labels = []
             beta = config["beta_initial"] * config["beta_decay"] ** round_index
             for _ in range(chunk):
+                training_track = env.track
                 with torch.inference_mode():
                     inputs = torch.from_numpy(obs).unsqueeze(0)
                     if algo == "dagger":
                         action = rollout.act(inputs).squeeze(0).numpy()
                     elif steps < config["warmup"]:
-                        action = rng.uniform(-1, 1, 3).astype(np.float32)
+                        action = rng.uniform(-1, 1, ACTION_DIM).astype(np.float32)
                     else:
                         action = rollout(inputs).value.squeeze(0).numpy()
                 if algo == "dagger":
-                    label = env.expert_action(config["conservative"])
+                    label = env.expert_action()
                     new_labels.append(label)
                     expert_queries += 1
                     if rng.random() < beta:
@@ -273,19 +313,25 @@ def run(config, out):
                 for key, value in zip(rows, [obs, action, reward, nxt, term]):
                     rows[key].append(value)
                 steps += 1
+                track_steps[training_track] += 1
                 obs = nxt
-                if term or trunc:
-                    episodes += 1
+                budget_boundary = (
+                    track_steps[training_track] == config["steps_per_track"]
+                )
+                if term or trunc or budget_boundary:
                     append_json(
                         out / "episodes.jsonl",
                         {
                             "step": steps,
+                            "track": training_track,
                             "success": term,
+                            "budget_boundary": budget_boundary,
                             "sim_seconds": info["elapsed_seconds"],
                             "distance": info["distance"],
                         },
                     )
-                    obs, _ = env.reset(seed=config["seed"] * 100000 + episodes)
+                    if steps < config["steps"]:
+                        obs = reset_training()
             if algo == "dagger":
                 labels_obs = torch.cat(
                     [labels_obs, torch.from_numpy(np.asarray(rows["obs"]))]
@@ -327,6 +373,7 @@ def run(config, out):
             if not all(np.isfinite(value) for value in metrics.values()):
                 raise FloatingPointError(f"Non-finite training metrics: {metrics}")
             if algo == "dagger" or steps % 1024 == 0:
+                record_status("running")
                 append_json(
                     out / "training.jsonl",
                     dict(
@@ -357,8 +404,8 @@ def run(config, out):
                     flush=True,
                 )
                 next_eval += config["eval_every"]
-                episodes += 1
-                obs, _ = env.reset(seed=config["seed"] * 100000 + episodes)
+                if steps < config["steps"] and not stop:
+                    obs = reset_training()
         if stop:
             save_state("stopped")
     except Exception as exc:
@@ -376,23 +423,24 @@ def defaults():
         "algo": "sac",
         "seed": 0,
         "device": "mps",
-        "track": "lighthouse",
+        "tracks": list(TRAIN_TRACKS),
+        "steps_per_track": 100000,
         "max_steps": 1500,
-        "dataset": "data/expert.npz",
+        "dataset": "data/team4-polar-v3/demonstrations.npz",
         "demo_episodes": 20,
-        "conservative": False,
-        "steps": 100000,
+        "schema_version": SCHEMA_VERSION,
+        "steps": 1200000,
         "hidden": 128,
         "batch_size": 256,
         "lr": 3e-4,
         "gamma": 0.99,
-        "eval_every": 10000,
+        "eval_every": 120000,
         "collect_steps": 32,
-        "warmup": 1000,
+        "warmup": 12000,
         "utd": 1,
-        "bc_updates": 2000,
-        "dagger_round": 2000,
-        "dagger_updates": 500,
+        "bc_updates": 24000,
+        "dagger_round": 24000,
+        "dagger_updates": 6000,
         "beta_initial": 0.5,
         "beta_decay": 0.5,
     }

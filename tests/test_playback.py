@@ -4,13 +4,21 @@ import pytest
 import torch
 
 from kartstudy.algorithms import Policy
+from kartstudy.environment import SCHEMA_VERSION
 from kartstudy.playback import discover_runs, load_actor
+from kartstudy.tracks import ALL_TRACKS
 
 
 def test_playback_catalog_requires_completed_checkpoint_and_unique_training_run(
     tmp_path,
 ):
-    config = {"algo": "dagger", "seed": 2, "demo_episodes": 20, "conservative": False}
+    config = {
+        "algo": "dagger",
+        "seed": 2,
+        "demo_episodes": 20,
+        "tracks": ["zengarden"],
+        "schema_version": SCHEMA_VERSION,
+    }
     run = tmp_path / "run"
     run.mkdir()
     (run / "config.json").write_text(json.dumps(config))
@@ -18,7 +26,9 @@ def test_playback_catalog_requires_completed_checkpoint_and_unique_training_run(
     (run / "checkpoint.pt").touch()
     assert discover_runs(tmp_path) == {}
     (run / "status.json").write_text(json.dumps({"status": "completed"}))
-    assert discover_runs(tmp_path) == {("baseline", "dagger", 2): run}
+    assert discover_runs(tmp_path) == {
+        (track, "dagger", 2): run for track in ALL_TRACKS
+    }
     duplicate = tmp_path / "duplicate"
     duplicate.mkdir()
     for name in ["config.json", "status.json", "checkpoint.pt"]:

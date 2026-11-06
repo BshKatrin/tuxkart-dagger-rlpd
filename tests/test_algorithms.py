@@ -91,7 +91,14 @@ def test_sac_updates_are_finite_and_targets_have_no_gradients(
     device, ensemble, layer_norm
 ):
     torch.manual_seed(0)
-    learner = SAC(7, hidden=16, device=device, ensemble=ensemble, layer_norm=layer_norm)
+    learner = SAC(
+        7,
+        action_dim=3,
+        hidden=16,
+        device=device,
+        ensemble=ensemble,
+        layer_norm=layer_norm,
+    )
     old = copy.deepcopy(learner.actor.state_dict())
     metrics = learner.update(transitions())
     assert all(math.isfinite(x) for x in metrics.values())
@@ -101,7 +108,14 @@ def test_sac_updates_are_finite_and_targets_have_no_gradients(
     )
     assert all(p.grad is None for p in learner.target_critics.parameters())
     assert all(p.grad is None for p in learner.critics.parameters())
-    clone = SAC(7, hidden=16, device=device, ensemble=ensemble, layer_norm=layer_norm)
+    clone = SAC(
+        7,
+        action_dim=3,
+        hidden=16,
+        device=device,
+        ensemble=ensemble,
+        layer_norm=layer_norm,
+    )
     clone.load_checkpoint(learner.checkpoint())
     assert clone.updates == learner.updates
     for a, b in zip(learner.parameters(), clone.parameters()):
@@ -110,7 +124,7 @@ def test_sac_updates_are_finite_and_targets_have_no_gradients(
 
 def test_saturated_policy_density_stays_finite_and_imitation_learns():
     torch.manual_seed(4)
-    actor = Policy(7, hidden=32)
+    actor = Policy(7, action_dim=3, hidden=32)
     obs = torch.randn(128, 7)
     target = torch.stack((obs[:, 0], -obs[:, 1], obs[:, 2]), -1).tanh()
     with torch.no_grad():
@@ -124,4 +138,142 @@ def test_saturated_policy_density_stays_finite_and_imitation_learns():
     sample.log_prob.mean().backward()
     assert all(
         p.grad is None or torch.isfinite(p.grad).all() for p in actor.parameters()
+    )
+
+
+@pytest.mark.parametrize("algo", ["bc", "dagger", "sac", "rlpd"])
+def test_shared_training_enforces_track_quotas_and_excludes_validation_and_evaluation(
+    tmp_path, monkeypatch, algo
+):
+    import json
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from kartstudy import train
+    from kartstudy.data import dataset_hash, load_transitions
+    from kartstudy.environment import SCHEMA_VERSION
+    from kartstudy.expert import Expert
+    from kartstudy.tracks import HELD_OUT_TRACKS, track_group
+
+    tracks = ["lighthouse", "zengarden"]
+    path = tmp_path / "demonstrations.npz"
+    # Each track has one training episode and two validation episodes.
+    observations = np.zeros((6, 84), np.float32)
+    observations[[1, 2, 4, 5]] = 99  # A marker that must never reach fitting/replay.
+    actions = np.zeros((6, 5), np.float32)
+    np.savez(
+        path,
+        obs=observations,
+        next_obs=observations,
+        action=actions,
+        expert_action=actions,
+        reward=np.zeros(6, np.float32),
+        terminated=np.ones(6, bool),
+        episode=np.arange(6),
+    )
+    metadata = {
+        "schema_version": SCHEMA_VERSION,
+        "tracks": tracks,
+        "expert": Expert.name,
+        "source_commit": Expert.source_commit,
+        "control_noise": False,
+        "max_steps": 3,
+        "sha256": dataset_hash(path),
+        "train_episode_ids": [0, 3],
+        "validation_episode_ids": [1, 2, 4, 5],
+        "episodes": [
+            {"episode": i, "track": tracks[i // 3], "success": True} for i in range(6)
+        ],
+    }
+    path.with_suffix(".json").write_text(json.dumps(metadata))
+    assert len(load_transitions(path)) == 2
+    assert not (load_transitions(path, 1).obs == 99).any()
+
+    class Env:
+        def __init__(self, track, max_steps):
+            self.track = track
+            self.env = SimpleNamespace(unwrapped=SimpleNamespace(default_track=track))
+
+        def reset(self, seed, track=None):
+            if track is not None:
+                self.track = track
+            self.n = 0
+            return np.full(84, tracks.index(self.track), np.float32), {}
+
+        def expert_action(self):
+            return np.zeros(5, np.float32)
+
+        def step(self, action):
+            self.n += 1
+            # Timeouts must bootstrap; the next track must not replace next_obs.
+            return (
+                np.full(84, tracks.index(self.track), np.float32),
+                0.1,
+                False,
+                self.n == 3,
+                {"elapsed_seconds": 0.1 * self.n, "distance": self.n},
+            )
+
+        def close(self):
+            pass
+
+    def evaluation(env, policy, seeds, device, trajectory_path=None):
+        assert not policy.training
+        # Deliberately change the simulator's state, like real evaluation does.
+        assert env.track in tracks + list(HELD_OUT_TRACKS)
+        return [{"seed": int(seed), "success": False, "steps": 1} for seed in seeds]
+
+    original_fit = train.fit_imitation
+
+    def fitting(actor, obs, actions, *args, **kwargs):
+        assert not (obs == 99).any()
+        return original_fit(actor, obs, actions, *args, **kwargs)
+
+    monkeypatch.setattr(train, "DrivingEnv", Env)
+    monkeypatch.setattr(train, "evaluate", evaluation)
+    monkeypatch.setattr(train, "fit_imitation", fitting)
+    config = train.defaults() | {
+        "algo": algo,
+        "device": "cpu",
+        "tracks": tracks,
+        "dataset": str(path),
+        "demo_episodes": 1,
+        "steps": 10,
+        "steps_per_track": 5,
+        "max_steps": 3,
+        "hidden": 8,
+        "batch_size": 4,
+        "bc_updates": 2,
+        "dagger_updates": 2,
+        "dagger_round": 4,
+        "collect_steps": 4,
+        "eval_every": 6,
+        "warmup": 0,
+        "utd": 4 if algo == "rlpd" else 1,
+    }
+    out = tmp_path / "run"
+    train.run(config, out)
+    status = json.loads((out / "status.json").read_text())
+    assert status["status"] == "completed"
+    assert status["track_steps"] == dict.fromkeys(tracks, 0 if algo == "bc" else 5)
+    state = torch.load(out / "checkpoint.pt", weights_only=False)
+    if algo in ("sac", "rlpd"):
+        replay = state["replay"]._storage
+        assert set(replay.obs[:, 0].tolist()) == {0, 1}
+        assert torch.equal(replay.obs, replay.next_obs)
+        assert not replay.terminated.any()
+    evaluations = [
+        json.loads(line)
+        for line in (out / "evaluations.jsonl").read_text().splitlines()
+    ]
+    for row in evaluations:
+        for episode in row["episodes"]:
+            assert (episode["split"], episode["difficulty"]) == track_group(
+                episode["track"]
+            )
+        if not row["final"]:
+            assert {ep["track"] for ep in row["episodes"]} == set(tracks)
+    assert {ep["track"] for ep in evaluations[-1]["episodes"]} == set(tracks) | set(
+        HELD_OUT_TRACKS
     )

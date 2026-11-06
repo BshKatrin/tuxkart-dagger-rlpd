@@ -24,7 +24,7 @@ from torch.nn import functional as F
 class Policy(Actor[StochasticAction]):
     """Identical actor capacity for imitation learning and reward learning."""
 
-    def __init__(self, obs_dim: int, action_dim: int = 3, hidden: int = 128):
+    def __init__(self, obs_dim: int, action_dim: int = 5, hidden: int = 128):
         super().__init__()
         self.obs_dim, self.action_dim, self.hidden = obs_dim, action_dim, hidden
         self.encoder = build_mlp([obs_dim, hidden, hidden], output_activation=nn.ReLU())
@@ -138,7 +138,7 @@ class SAC(nn.Module):
     def __init__(
         self,
         obs_dim: int,
-        action_dim: int = 3,
+        action_dim: int = 5,
         device: str = "mps",
         ensemble: int = 2,
         layer_norm: bool = False,

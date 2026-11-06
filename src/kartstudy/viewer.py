@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from .playback import EXPERIMENTS, METHODS, annotated_frame
+from .playback import METHODS, annotated_frame
 
 
 def choices(playback, field):
@@ -14,16 +14,15 @@ def choices(playback, field):
             for m in METHODS
             if m == "expert"
             or any(
-                e == playback.experiment and method == m
-                for e, method, _ in playback.catalog
+                e == playback.track and method == m for e, method, _ in playback.catalog
             )
         ]
-    if field == "experiment":
-        return list(EXPERIMENTS.items())
     if field == "track":
-        return [("lighthouse", "Lighthouse"), ("snowtuxpeak", "Snow Tux Peak")]
-    if field == "perturb":
-        return [(False, "Normal driving"), (True, "Steering disturbance")]
+        titles = {"lighthouse": "Lighthouse", "snowtuxpeak": "Snow Tux Peak"}
+        return [
+            (track, titles.get(track, track.replace("_", " ").title()))
+            for track in playback.tracks
+        ]
     if playback.method == "expert":
         return [(0, "Expert reference")]
     return [
@@ -32,7 +31,7 @@ def choices(playback, field):
             {
                 s
                 for e, m, s in playback.catalog
-                if e == playback.experiment and m == playback.method
+                if e == playback.track and m == playback.method
             }
         )
     ]
@@ -44,9 +43,7 @@ def select(playback, field, value):
         for name in [
             "method",
             "train_seed",
-            "experiment",
             "track",
-            "perturb",
             "eval_seed",
         ]
     }
@@ -55,15 +52,13 @@ def select(playback, field, value):
         available = sorted(
             s
             for e, m, s in playback.catalog
-            if e == config["experiment"] and m == config["method"]
+            if e == config["track"] and m == config["method"]
         )
         if not available:
-            config["method"] = "dagger"
-            available = sorted(
-                s
-                for e, m, s in playback.catalog
-                if e == config["experiment"] and m == "dagger"
-            )
+            config["method"] = "expert"
+            config["train_seed"] = 0
+            playback.start(**config)
+            return
         if config["train_seed"] not in available:
             config["train_seed"] = available[0]
     playback.start(**config)
@@ -89,9 +84,7 @@ def show(playback, quit_after_steps=None):
     fields = [
         ("method", "Policy", 25),
         ("train_seed", "Training run", 16),
-        ("experiment", "Experiment", 22),
         ("track", "Track", 18),
-        ("perturb", "Condition", 23),
     ]
     selectors, labels = {}, {}
     paused, speed, photo = False, 1.0, None

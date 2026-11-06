@@ -22,8 +22,8 @@ def main():
         "Final available checkpoints; confidence intervals bootstrap independent training seeds.",
         "Lap times are conditional on successful completion. A single seed has no interval.",
         "",
-        "| Configuration | Evaluation | Checkpoint steps | Training seeds | Completion | Successful lap time (s) |",
-        "|---|---|---:|---:|---:|---:|",
+        "| Configuration | Evaluation | Checkpoint steps | Training seeds | Completion | Off-track time | Rescues/lap | Successful lap time (s) |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
 
     def fmt(estimate, percentage=False):
@@ -48,7 +48,7 @@ def main():
             else f"{low_step}–{high_step} (unequal)"
         )
         lines.append(
-            f"| {index + 1}. {label} | {result['condition']} | {step_label} | {n} | {fmt(result['completion_rate'], True)} | {fmt(result['conditional_lap_time'])} |"
+            f"| {index + 1}. {label} | {result['condition']} | {step_label} | {n} | {fmt(result['completion_rate'], True)} | {fmt(result['off_track_fraction'], True)} | {fmt(result['rescue_count'])} | {fmt(result['conditional_lap_time'])} |"
         )
     lines.extend(["", "## Configurations", ""])
     for index, result in enumerate(summaries):

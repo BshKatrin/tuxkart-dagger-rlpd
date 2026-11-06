@@ -1,0 +1,54 @@
+{
+  "AgentPilot.py": {
+    "upstream_sha256": "021e2bccdb83da0915b3c709fb4b29fec3dd5c9da01bb1e257668a8f2fbf973a",
+    "local_sha256": "021e2bccdb83da0915b3c709fb4b29fec3dd5c9da01bb1e257668a8f2fbf973a"
+  },
+  "ItemType.py": {
+    "upstream_sha256": "29f31c36a219896db67cd55845b581fcd98b12ba34ee0f6b226f2c85d0960723",
+    "local_sha256": "29f31c36a219896db67cd55845b581fcd98b12ba34ee0f6b226f2c85d0960723"
+  },
+  "AgentNitro.py": {
+    "upstream_sha256": "dc011f3cb7c7004344aa6c0e3f9463b1470a0fb96c04b926868ff2a28941a839",
+    "local_sha256": "c0604060c345dbb7b78abc72a1fbe21c3f272b55392f33c56b20a68a70869613"
+  },
+  "speed.py": {
+    "upstream_sha256": "8413e4944ffa79435ccb0a8ececdcfd05f04d2bb71fa95049d92857b2d67c238",
+    "local_sha256": "ac3ae572bf224462c34c603688f7c7bddaf6dc61250c02e2eb136f7c778b34fe"
+  },
+  "AgentEsquiveAdv.py": {
+    "upstream_sha256": "4bc658c90f3d913294fe409c6e925cc57da72db1db31ca0c93f7e42fc58ab0f7",
+    "local_sha256": "4bc658c90f3d913294fe409c6e925cc57da72db1db31ca0c93f7e42fc58ab0f7"
+  },
+  "steering.py": {
+    "upstream_sha256": "2b4c841441b21b6eb947041224f0e3e509c49270e8b76ed3a07e838823062711",
+    "local_sha256": "2b4c841441b21b6eb947041224f0e3e509c49270e8b76ed3a07e838823062711"
+  },
+  "AgentBanana.py": {
+    "upstream_sha256": "e78d91ffc5d10644e863850286b03e66cf7099aad5ebe57edbd2013f00e0d204",
+    "local_sha256": "b7ef73be0b99d55cdbfe07165471260a4278b7c64e364502435f214ef81da870"
+  },
+  "track_utils.py": {
+    "upstream_sha256": "cc792e5f32c6325462e8a1f712d3669afce82ba73428678f701acafaba893886",
+    "local_sha256": "ef4fa8ad22594cd6b5382d6e5dd1864c36ba8a48da1c796d0061e00c9245ed9f"
+  },
+  "configuration.yaml": {
+    "upstream_sha256": "e78f4e42396d434fcf964e6da19e0587fae9c2d497f12ce144dd01492a88bfb3",
+    "local_sha256": "e78f4e42396d434fcf964e6da19e0587fae9c2d497f12ce144dd01492a88bfb3"
+  },
+  "AgentItems.py": {
+    "upstream_sha256": "2a0f604f224ba51d1b868aecf20cfde9377fc877c9c331cfa14a079e8bcd2b6b",
+    "local_sha256": "2a0f604f224ba51d1b868aecf20cfde9377fc877c9c331cfa14a079e8bcd2b6b"
+  },
+  "agent4.py": {
+    "upstream_sha256": "ab1afc38b12ac394e2b768cfd6661e8ccc53f5910600cb59f819486a80129f30",
+    "local_sha256": "716e34eecd490e3ae2b3f302c677e4d459d36095792406bf0d751eaf0d056c5d"
+  },
+  "kart_agent.py": {
+    "upstream_sha256": "829a2218e6a53d3316a945298915783fafb0639015893ccea9ebeb325c2a6813",
+    "local_sha256": "829a2218e6a53d3316a945298915783fafb0639015893ccea9ebeb325c2a6813"
+  },
+  "AgentRescue.py": {
+    "upstream_sha256": "f02a681ad85e6937adfb75cb9fdcd1851fd7b2ab2addea7a567aaafb9cf3eefe",
+    "local_sha256": "f02a681ad85e6937adfb75cb9fdcd1851fd7b2ab2addea7a567aaafb9cf3eefe"
+  }
+}

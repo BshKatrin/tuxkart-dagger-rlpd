@@ -2,7 +2,7 @@
 
 This repository studies DAgger and RLPD for solo SuperTuxKart driving.
 [README.md](README.md) explains the research questions;
-[docs/initial-experiments.md](docs/initial-experiments.md) records the first experimental suite.
+[docs/study.md](docs/study.md) defines the study protocol.
 
 ## Working principles
 
@@ -28,26 +28,32 @@ per worker process, rather than sharing it between threads. The simulator
 downloads its assets on first use. Limit concurrent learners based on measured
 throughput; more Metal processes do not necessarily train faster.
 
+Rescue telemetry uses a read-only native bridge against PySuperTuxKart2 0.7.4.
+First use downloads checksum-verified source headers and compiles the small bridge
+with Xcode Command Line Tools (`xcrun clang++`). Generated files stay in ignored
+`runs/native-metrics/`; the simulator and policy are not modified. Rebuild is keyed
+to the installed simulator binary and bridge source. Unsupported versions fail
+explicitly rather than silently reporting zero rescues.
+
 ## Running experiments
 
 Qualify the expert before collecting data. The collector requires every lap to
 finish and refuses to overwrite an existing dataset.
 
 ```sh
-uv run python scripts/qualify_expert.py
-uv run python -m kartstudy.data --output data/expert.npz
-uv run python -m kartstudy.data --output data/conservative.npz --conservative
-uv run python scripts/run_suite.py --output runs/study --workers 2
+uv run python scripts/qualify_expert.py --output runs/qualification-polar-v3/metrics.json
+uv run python -m kartstudy.data --output data/team4-polar-v3/demonstrations.npz
+uv run python scripts/run_suite.py --output runs/study-polar-v3 --workers 2
 ```
 
 The suite launcher generates configurations, bounds concurrency, saves a source
 archive, and stops the queue if a worker fails. Use a fresh output directory
 for each suite. Inspect the actual worker configuration and dataset metadata
-before interpreting a result; the initial-experiments document describes the first suite’s intended protocol.
+before interpreting a result; the study protocol describes the intended comparison.
 
 ```sh
-uv run python scripts/status.py runs/study
-uv run python scripts/summarize.py runs/study
+uv run python scripts/status.py runs/study-polar-v3
+uv run python scripts/summarize.py runs/study-polar-v3
 ```
 
 Generated datasets and runs are Git-ignored. Dataset metadata records the split,
@@ -86,7 +92,7 @@ of training; preserve the suite's original source archive.
 To stop launching queued jobs while letting active workers finish:
 
 ```sh
-touch runs/study/STOP
+touch runs/study-polar-v3/STOP
 ```
 
 To stop active workers too, send SIGTERM to the suite PID recorded in its

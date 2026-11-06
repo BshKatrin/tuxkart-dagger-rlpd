@@ -11,20 +11,15 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 
 from .algorithms import Policy
-from .environment import DrivingEnv
+from .environment import ACTION_DIM, SCHEMA_VERSION, DrivingEnv
+from .tracks import ALL_TRACKS
 
 METHODS = {
     "expert": "Expert",
     "bc": "Behavior cloning",
     "dagger": "DAgger",
     "sac": "Online SAC",
-    "sac_sym": "SAC + symmetric sampling",
     "rlpd": "RLPD",
-}
-EXPERIMENTS = {
-    "baseline": "Baseline",
-    "small_data": "Small dataset",
-    "conservative_expert": "Conservative expert",
 }
 
 
@@ -40,15 +35,13 @@ def discover_runs(root):
             continue
         if json.loads(status_path.read_text()).get("status") != "completed":
             continue
-        experiment = (
-            "conservative_expert"
-            if config.get("conservative")
-            else ("small_data" if config.get("demo_episodes") == 2 else "baseline")
-        )
-        key = (experiment, config["algo"], int(config["seed"]))
-        if key in catalog:
-            raise ValueError(f"Duplicate completed run for {key}")
-        catalog[key] = path.parent
+        if config.get("schema_version") != SCHEMA_VERSION:
+            continue
+        for track in ALL_TRACKS:
+            key = (track, config["algo"], int(config["seed"]))
+            if key in catalog:
+                raise ValueError(f"Duplicate completed run for {key}")
+            catalog[key] = path.parent
     return catalog
 
 
@@ -59,41 +52,41 @@ def load_actor(path):
     )
     config = state["config"]
     weights = state["actor"]
-    actor = Policy(weights["encoder.0.weight"].shape[1], hidden=config["hidden"])
+    actor = Policy(
+        weights["encoder.0.weight"].shape[1],
+        action_dim=weights["mean.weight"].shape[0],
+        hidden=config["hidden"],
+    )
     actor.load_state_dict(weights)
     return actor.eval(), config, int(state["step"])
 
 
 class Playback:
-    def __init__(self, root="runs/study", width=960, height=540):
+    def __init__(self, root="runs/study-polar-v3", width=960, height=540):
         torch.set_num_threads(1)
         self.root, self.width, self.height = Path(root), width, height
         self.catalog = discover_runs(root)
         self.env = None
         self.actor = None
         self.method = "expert"
-        self.experiment = "baseline"
         self.train_seed = 0
         self.eval_seed = 20000
         self.track = "lighthouse"
-        self.perturb = False
 
     def start(
         self,
         method="dagger",
         train_seed=0,
-        experiment="baseline",
         track="lighthouse",
-        perturb=False,
         eval_seed=20000,
         render=True,
     ):
-        if method not in METHODS or experiment not in EXPERIMENTS:
-            raise ValueError("Unknown policy or experiment")
+        if method not in METHODS:
+            raise ValueError("Unknown policy")
         if method == "expert":
             actor, checkpoint_step = None, None
         else:
-            key = (experiment, method, int(train_seed))
+            key = (track, method, int(train_seed))
             if key not in self.catalog:
                 raise ValueError("No completed checkpoint for this combination")
             actor, _config, checkpoint_step = load_actor(self.catalog[key])
@@ -102,11 +95,13 @@ class Playback:
                 track=track, render=render, width=self.width, height=self.height
             )
         self.actor, self.method, self.train_seed = actor, method, int(train_seed)
-        self.experiment, self.track, self.perturb = experiment, track, perturb
+        self.track = track
         self.eval_seed, self.checkpoint_step = int(eval_seed), checkpoint_step
-        self.env.env.unwrapped.default_track = track
-        self.env.perturb = perturb
-        self.obs, _ = self.env.reset(seed=self.eval_seed)
+        self.obs, _ = self.env.reset(seed=self.eval_seed, track=track)
+        # Track discovery requires the simulator initialized in this process.
+        import pystk2
+
+        self.tracks = sorted(pystk2.list_tracks(pystk2.RaceConfig.RaceMode.NORMAL_RACE))
         self.done, self.steps, self.total_reward = False, 0, 0.0
         self.info = {
             "elapsed_seconds": 0.0,
@@ -114,18 +109,16 @@ class Playback:
             "progress": 0.0,
             "lateral_error": 0.0,
             "success": False,
-            "action_overridden": False,
         }
-        self.action = np.array([0.0, -1.0, -1.0], np.float32)
+        self.action = np.full(ACTION_DIM, -1.0, np.float32)
+        self.action[0] = 0
         self.executed_action = self.action.copy()
 
     def restart(self):
         self.start(
             self.method,
             self.train_seed,
-            self.experiment,
             self.track,
-            self.perturb,
             self.eval_seed,
         )
 
@@ -134,9 +127,7 @@ class Playback:
             return
         with torch.inference_mode():
             if self.actor is None:
-                action = self.env.expert_action(
-                    self.experiment == "conservative_expert"
-                )
+                action = self.env.expert_action()
             else:
                 action = (
                     self.actor.act(torch.from_numpy(self.obs).unsqueeze(0))
@@ -165,11 +156,9 @@ class Playback:
     def summary(self):
         return {
             "method": self.method,
-            "experiment": self.experiment,
             "training_seed": None if self.method == "expert" else self.train_seed,
             "evaluation_seed": self.eval_seed,
             "track": self.track,
-            "perturb": self.perturb,
             "checkpoint_step": self.checkpoint_step,
             "steps": self.steps,
             "return_": self.total_reward,
@@ -204,9 +193,8 @@ def _render_worker(connection, root, width, height):
                 names = [
                     "method",
                     "train_seed",
-                    "experiment",
                     "track",
-                    "perturb",
+                    "tracks",
                     "eval_seed",
                     "checkpoint_step",
                     "done",
@@ -229,7 +217,7 @@ def _render_worker(connection, root, width, height):
 class RemotePlayback:
     """Isolate SDL/OpenGL from Tk's Cocoa application on macOS."""
 
-    def __init__(self, root="runs/study", width=960, height=540):
+    def __init__(self, root="runs/study-polar-v3", width=960, height=540):
         import multiprocessing as mp
 
         self.root, self.width, self.height = root, width, height
@@ -271,9 +259,7 @@ class RemotePlayback:
                 for name in [
                     "method",
                     "train_seed",
-                    "experiment",
                     "track",
-                    "perturb",
                     "eval_seed",
                 ]
             }
@@ -314,9 +300,7 @@ def annotated_frame(playback):
     )
     title = f"{METHODS[playback.method]}{seed}"
     state = (
-        ("FINISHED" if info["success"] else "TIMEOUT")
-        if playback.done
-        else ("STEERING DISTURBANCE" if info["action_overridden"] else "DRIVING")
+        ("FINISHED" if info["success"] else "TIMEOUT") if playback.done else "DRIVING"
     )
     draw.text((16, game.height + 9), title, font=font(18), fill="#f1f5f7")
     a = playback.executed_action
@@ -367,13 +351,11 @@ def record(playback, output, limit_steps=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", default="runs/study")
-    parser.add_argument("--policy", choices=METHODS, default="dagger")
+    parser.add_argument("--root", default="runs/study-polar-v3")
+    parser.add_argument("--policy", choices=METHODS, default="expert")
     parser.add_argument("--train-seed", type=int, default=0)
     parser.add_argument("--eval-seed", type=int, default=20000)
-    parser.add_argument("--experiment", choices=EXPERIMENTS, default="baseline")
     parser.add_argument("--track", default="lighthouse")
-    parser.add_argument("--perturb", action="store_true")
     parser.add_argument(
         "--record",
         type=Path,
@@ -397,9 +379,7 @@ def main():
         playback.start(
             method=args.policy,
             train_seed=args.train_seed,
-            experiment=args.experiment,
             track=args.track,
-            perturb=args.perturb,
             eval_seed=args.eval_seed,
         )
         if args.record:

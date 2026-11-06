@@ -10,13 +10,14 @@ from typing import Any
 import numpy as np
 import torch
 
+from .environment import SCHEMA_VERSION
+
 
 def evaluate(
     env,
     actor,
     seeds,
     device: str = "cpu",
-    perturb: bool = False,
     trajectory_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate deterministic actions on fixed seeds, without updating the actor.
@@ -24,23 +25,19 @@ def evaluate(
     ``actor`` can be a torch actor exposing ``act(batch)`` or a callable accepting
     one numpy observation. Failed laps have ``lap_time=None``. The environment
     is reused sequentially and left at its last evaluated terminal state; callers
-    must reset before resuming training. Evaluation perturbations belong to the
-    environment and are restored after evaluation, including on exceptions.
+    must reset before resuming training.
     """
     records: list[dict[str, Any]] = []
     traces: dict[str, list] = defaultdict(list)
-    prior_perturb = env.perturb
     was_training = actor.training if isinstance(actor, torch.nn.Module) else None
     if isinstance(actor, torch.nn.Module):
         actor.eval()
-    env.perturb = perturb
     try:
         with torch.inference_mode():
             for episode_index, seed in enumerate(seeds):
                 obs, _ = env.reset(seed=int(seed))
                 total_reward, steps, lateral_sum = 0.0, 0, 0.0
                 max_progress, max_distance = 0.0, 0.0
-                overridden_steps = 0
                 terminated = truncated = False
                 info = {}
                 while not (terminated or truncated):
@@ -58,7 +55,6 @@ def evaluate(
                     lateral_sum += lateral
                     max_progress = max(max_progress, float(info.get("progress", 0.0)))
                     max_distance = max(max_distance, float(info.get("distance", 0.0)))
-                    overridden_steps += int(info.get("action_overridden", False))
                     if trajectory_path is not None:
                         traces["obs"].append(np.asarray(obs, dtype=np.float32))
                         traces["next_obs"].append(
@@ -88,12 +84,15 @@ def evaluate(
                             "progress",
                             "distance",
                             "elapsed_seconds",
+                            "off_track_fraction",
+                            "rescue_count",
                         ):
                             traces[key].append(float(info.get(key, float("nan"))))
-                        traces["action_overridden"].append(
-                            bool(info.get("action_overridden", False))
-                        )
                         traces["terminated"].append(bool(terminated))
+                        traces["is_on_road"].append(bool(info.get("is_on_road", True)))
+                        traces["rescue_active"].append(
+                            bool(info.get("rescue_active", False))
+                        )
                         traces["truncated"].append(bool(truncated))
                     obs = next_obs
                 success = bool(terminated and info.get("success", True))
@@ -114,11 +113,27 @@ def evaluate(
                         "max_progress": max_progress,
                         "max_distance": max_distance,
                         "mean_abs_lateral_error": lateral_sum / max(1, steps),
-                        "overridden_steps": overridden_steps,
+                        "average_speed_m_s": float(
+                            info["track_length_m"]
+                            / (info.get("finish_time") or sim_seconds)
+                        )
+                        if success and "track_length_m" in info
+                        else None,
+                        "harmful_contact_proportion": info.get(
+                            "harmful_contact_proportion"
+                        ),
+                        **{
+                            key: info.get(key)
+                            for key in (
+                                "measurement_seconds",
+                                "off_track_seconds",
+                                "off_track_fraction",
+                                "rescue_count",
+                            )
+                        },
                     }
                 )
     finally:
-        env.perturb = prior_perturb
         if isinstance(actor, torch.nn.Module):
             actor.train(bool(was_training))
     if trajectory_path is not None:
@@ -128,6 +143,11 @@ def evaluate(
             path, **{key: np.asarray(value) for key, value in traces.items()}
         )
     return records
+
+
+def _mean_available(rows, metric):
+    values = [row[metric] for row in rows if row.get(metric) is not None]
+    return float(np.mean(values)) if values else None
 
 
 def _estimate(values: list[float], rng, bootstrap_samples: int) -> dict:
@@ -155,7 +175,7 @@ def summarize_runs(
 ) -> list[dict]:
     """Summarize each run's last checkpoint, bootstrapping *training seeds*.
 
-    Evaluation rows must have ``step``, ``condition``, and ``episodes`` fields.
+    Evaluation rows must have ``step`` and ``episodes`` fields.
     Each run has a sibling ``config.json`` including ``seed``. All other config
     fields define experimental conditions, except output/runtime metadata below.
     Duplicate directories for the same config and training seed count once.
@@ -181,7 +201,7 @@ def summarize_runs(
         if not config_path.exists():
             continue
         config = json.loads(config_path.read_text())
-        if "seed" not in config:
+        if config.get("schema_version") != SCHEMA_VERSION or "seed" not in config:
             continue
         comparable = {
             key: value for key, value in config.items() if key not in excluded
@@ -196,15 +216,26 @@ def summarize_runs(
                 continue  # An actively written final line can be incomplete.
             if not row.get("episodes"):
                 continue
-            condition = row.get("condition", "normal")
-            key = signature, condition, int(config["seed"])
-            if key not in latest or row["step"] >= latest[key]["step"]:
-                latest[key] = {
-                    **row,
-                    "config": comparable,
-                    "training_seed": int(config["seed"]),
-                    "path": str(path.parent),
-                }
+            partitions = defaultdict(list)
+            for episode in row["episodes"]:
+                if "track" not in episode:
+                    partitions["normal"].append(episode)
+                else:
+                    partitions[f"track/{episode['track']}"].append(episode)
+                    partitions[f"{episode['split']}/{episode['difficulty']}"].append(
+                        episode
+                    )
+                    partitions[f"{episode['split']}/all"].append(episode)
+            for condition, episodes in partitions.items():
+                key = signature, condition, int(config["seed"])
+                if key not in latest or row["step"] >= latest[key]["step"]:
+                    latest[key] = {
+                        **row,
+                        "episodes": episodes,
+                        "config": comparable,
+                        "training_seed": int(config["seed"]),
+                        "path": str(path.parent),
+                    }
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for (signature, condition, _), row in latest.items():
         groups[(signature, condition)].append(row)
@@ -228,6 +259,12 @@ def summarize_runs(
                     "conditional_lap_time": float(np.mean(lap_times))
                     if lap_times
                     else None,
+                    "average_speed_m_s": _mean_available(eps, "average_speed_m_s"),
+                    "off_track_fraction": _mean_available(eps, "off_track_fraction"),
+                    "rescue_count": _mean_available(eps, "rescue_count"),
+                    "harmful_contact_proportion": _mean_available(
+                        eps, "harmful_contact_proportion"
+                    ),
                     "return": float(np.mean([e["return"] for e in eps])),
                     "mean_abs_lateral_error": float(
                         np.mean([e["mean_abs_lateral_error"] for e in eps])
@@ -246,6 +283,10 @@ def summarize_runs(
         for metric in (
             "completion_rate",
             "conditional_lap_time",
+            "average_speed_m_s",
+            "off_track_fraction",
+            "rescue_count",
+            "harmful_contact_proportion",
             "return",
             "mean_abs_lateral_error",
         ):
