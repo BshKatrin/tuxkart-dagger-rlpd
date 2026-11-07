@@ -50,3 +50,50 @@ def test_loaded_checkpoint_preserves_deterministic_actions_and_architecture(tmp_
     assert restored == config and step == 50000
     assert not loaded.training
     assert next(loaded.parameters()).device.type == "cpu"
+    # A portable actor-only file must work without replay/optimizer objects.
+    torch.save(
+        {"actor": actor.state_dict(), "config": config, "step": 50000},
+        tmp_path / "actor.pt",
+    )
+    (tmp_path / "checkpoint.pt").unlink()
+    lightweight, _, _ = load_actor(tmp_path)
+    torch.testing.assert_close(lightweight.act(obs), actor.act(obs), atol=0, rtol=0)
+
+
+def test_selected_policies_hide_extra_runs_without_removing_checkpoints(tmp_path):
+    for seed in (0, 1):
+        run = tmp_path / f"shared_dagger_s{seed}"
+        run.mkdir()
+        (run / "config.json").write_text(
+            json.dumps(
+                {
+                    "algo": "dagger",
+                    "seed": seed,
+                    "schema_version": SCHEMA_VERSION,
+                }
+            )
+        )
+        (run / "status.json").write_text(json.dumps({"status": "completed"}))
+        (run / "checkpoint.pt").touch()
+    (tmp_path / "selected-policies.json").write_text(
+        json.dumps({"dagger": "shared_dagger_s0"})
+    )
+    catalog = discover_runs(tmp_path)
+    assert {key[2] for key in catalog} == {0}
+    assert (tmp_path / "shared_dagger_s1" / "checkpoint.pt").exists()
+
+
+def test_remote_timeout_is_bounded_and_closes_stalled_worker():
+    from types import SimpleNamespace
+
+    from kartstudy.playback import RemotePlayback
+
+    playback = RemotePlayback.__new__(RemotePlayback)
+    closed = []
+    playback.connection = SimpleNamespace(
+        send=lambda request: None, poll=lambda timeout: False
+    )
+    playback.close = lambda: closed.append(True)
+    with pytest.raises(RuntimeError, match="Reset simulator"):
+        playback._request("start", {})
+    assert closed == [True]

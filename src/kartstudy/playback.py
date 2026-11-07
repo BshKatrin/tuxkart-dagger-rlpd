@@ -25,10 +25,14 @@ METHODS = {
 
 def discover_runs(root):
     """Use actual completed-run metadata rather than assumptions about filenames."""
+    selection = Path(root) / "selected-policies.json"
+    selected = json.loads(selection.read_text()) if selection.exists() else None
     catalog = {}
     for path in sorted(Path(root).glob("*/config.json")):
         config = json.loads(path.read_text())
         if config.get("algo") not in METHODS or config["algo"] == "expert":
+            continue
+        if selected is not None and selected.get(config["algo"]) != path.parent.name:
             continue
         status_path = path.parent / "status.json"
         if not status_path.exists() or not (path.parent / "checkpoint.pt").exists():
@@ -47,8 +51,13 @@ def discover_runs(root):
 
 def load_actor(path):
     # These are trusted local experiment checkpoints, containing rl_mind objects.
+    path = Path(path)
+    lightweight = path / "actor.pt"
     state = torch.load(
-        Path(path) / "checkpoint.pt", map_location="cpu", weights_only=False, mmap=True
+        lightweight if lightweight.exists() else path / "checkpoint.pt",
+        map_location="cpu",
+        weights_only=lightweight.exists(),
+        mmap=True,
     )
     config = state["config"]
     weights = state["actor"]
@@ -66,6 +75,7 @@ class Playback:
         torch.set_num_threads(1)
         self.root, self.width, self.height = Path(root), width, height
         self.catalog = discover_runs(root)
+        self.actors = {}
         self.env = None
         self.actor = None
         self.method = "expert"
@@ -89,7 +99,10 @@ class Playback:
             key = (track, method, int(train_seed))
             if key not in self.catalog:
                 raise ValueError("No completed checkpoint for this combination")
-            actor, _config, checkpoint_step = load_actor(self.catalog[key])
+            path = self.catalog[key]
+            if path not in self.actors:
+                self.actors[path] = load_actor(path)
+            actor, _config, checkpoint_step = self.actors[path]
         if self.env is None:
             self.env = DrivingEnv(
                 track=track, render=render, width=self.width, height=self.height
@@ -101,7 +114,10 @@ class Playback:
         # Track discovery requires the simulator initialized in this process.
         import pystk2
 
-        self.tracks = sorted(pystk2.list_tracks(pystk2.RaceConfig.RaceMode.NORMAL_RACE))
+        self.tracks = sorted(
+            set(ALL_TRACKS)
+            & set(pystk2.list_tracks(pystk2.RaceConfig.RaceMode.NORMAL_RACE))
+        )
         self.done, self.steps, self.total_reward = False, 0, 0.0
         self.info = {
             "elapsed_seconds": 0.0,
@@ -218,14 +234,20 @@ class RemotePlayback:
     """Isolate SDL/OpenGL from Tk's Cocoa application on macOS."""
 
     def __init__(self, root="runs/study-polar-four", width=960, height=540):
-        import multiprocessing as mp
-
         self.root, self.width, self.height = root, width, height
         self.catalog = discover_runs(root)
+        self.last_start = {}
+        self._spawn_worker()
+
+    def _spawn_worker(self):
+        import multiprocessing as mp
+
         context = mp.get_context("spawn")
         self.connection, child = context.Pipe()
         self.process = context.Process(
-            target=_render_worker, args=(child, root, width, height), daemon=True
+            target=_render_worker,
+            args=(child, self.root, self.width, self.height),
+            daemon=True,
         )
         self.process.start()
         child.close()
@@ -233,6 +255,11 @@ class RemotePlayback:
     def _request(self, operation, arguments):
         try:
             self.connection.send((operation, arguments))
+            if not self.connection.poll(30 if operation == "start" else 5):
+                self.close()
+                raise RuntimeError(
+                    "Simulator timed out. Click Reset simulator to start a fresh process."
+                )
             kind, state, frame = self.connection.recv()
         except (EOFError, BrokenPipeError, ConnectionResetError) as exc:
             raise RuntimeError(
@@ -244,7 +271,15 @@ class RemotePlayback:
         self._frame = frame
 
     def start(self, **kwargs):
+        self.last_start = kwargs.copy()
         self._request("start", kwargs)
+
+    def reset_simulator(self):
+        """Replace only this viewer's native process and restart its selected episode."""
+        arguments = self.last_start.copy()
+        self.close()
+        self._spawn_worker()
+        self.start(**arguments)
 
     def step(self):
         self._request("step", {})
@@ -266,15 +301,13 @@ class RemotePlayback:
         )
 
     def close(self):
+        # Bounded teardown also works when the native renderer is wedged.
         if self.process.is_alive():
-            try:
-                self.connection.send(("close", {}))
-            except (BrokenPipeError, OSError):
-                pass
-            self.process.join(timeout=5)
+            self.process.terminate()
+            self.process.join(timeout=0.5)
             if self.process.is_alive():
-                self.process.terminate()
-                self.process.join(timeout=5)
+                self.process.kill()
+                self.process.join(timeout=0.5)
         self.connection.close()
 
 
@@ -295,10 +328,7 @@ def annotated_frame(playback):
     image.paste(game, (0, 0))
     draw = ImageDraw.Draw(image)
     info = playback.info
-    seed = (
-        "" if playback.method == "expert" else f" / training seed {playback.train_seed}"
-    )
-    title = f"{METHODS[playback.method]}{seed}"
+    title = METHODS[playback.method]
     state = (
         ("FINISHED" if info["success"] else "TIMEOUT") if playback.done else "DRIVING"
     )
@@ -352,7 +382,7 @@ def record(playback, output, limit_steps=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default="runs/study-polar-four")
-    parser.add_argument("--policy", choices=METHODS, default="expert")
+    parser.add_argument("--policy", choices=METHODS, default="dagger")
     parser.add_argument("--train-seed", type=int, default=0)
     parser.add_argument("--eval-seed", type=int, default=20000)
     parser.add_argument("--track", default="lighthouse")

@@ -1,21 +1,46 @@
 # Policy playback
 
-```sh
-uv run python -m kartstudy.playback --policy expert
-uv run python -m kartstudy.playback --root runs/study-polar-four --policy dagger --track zengarden
-```
-
-Select the track, policy, and training seed. Only completed compatible checkpoints
-are offered. When no checkpoint exists for a selection, the viewer uses the
-original expert. Playback always uses normal driving, deterministic CPU inference,
-and the shared 0.1-second action interval. Pause, step, restart, and speed controls
-change wall time only. Tk and the simulator run in separate processes on macOS.
+Restore the release first: extract `selected-policies.zip` and `study-data.zip`
+at the repository root, then run `uv sync --locked`.
 
 ```sh
-uv run python -m kartstudy.playback --policy expert --track zengarden \
-  --record runs/visualizations/expert-zengarden.mp4
+uv run python -m kartstudy.playback
+uv run python -m kartstudy.playback --policy rlpd --track stk_enterprise
+uv run python -m kartstudy.playback --policy expert --track lighthouse
 ```
 
-Recording saves an MP4 and JSON sidecar and refuses existing output paths.
-`--limit-steps 100` records a partial preview. Fresh rendering can cause tiny
-floating-point differences; official evaluation logs remain authoritative.
+The default is DAgger. Select Policy and Track in the Tk window. The four learned
+policies all retain **training seed 0**, alongside the original expert reference.
+[Tracks and policies](tracks-and-policies.md) lists every CLI name, simulator track
+ID, difficulty group and training/evaluation role. The viewer offers the 13 study
+tracks; eight unused tracks are listed for reference only.
+
+- **Pause / Play** (Space): pause or resume simulation.
+- **Step →** (Right arrow): advance one 0.1-second action and pause.
+- **Restart** (R): reset the selected episode with the same policy and evaluation seed.
+- **Reset simulator**: terminate this viewer's renderer and create a fresh native
+  simulator process, retaining the policy, track and evaluation seed.
+- **Playback speed**: 0.25×, 0.5×, 1×, 2× or 4× wall-time pacing.
+- **Escape / close window**: stop the viewer and its renderer.
+
+Track loading happens in the renderer. Tk stays responsive while requests run;
+selectors are disabled until loading completes. A request that exceeds 30 seconds
+for loading or five seconds for a step stops the renderer and displays an error.
+Click Reset simulator after an error. It does not affect datasets, training or
+other simulator processes. Tk and SDL/OpenGL stay in separate processes on macOS.
+
+Playback uses deterministic CPU inference at the original 0.1-second action
+interval. Speed changes wall time only. `--eval-seed` defaults to 20000;
+`--root` defaults to `runs/study-polar-four`. `--width` and `--height` control
+render size (even dimensions, minimum 640 × 360). `--train-seed` is an advanced
+checkpoint selector; the distributed selection contains only seed 0.
+
+```sh
+uv run python -m kartstudy.playback --policy rlpd --track stk_enterprise \
+  --record runs/visualizations/rlpd-enterprise.mp4
+```
+
+`--record` saves an MP4 plus JSON sidecar instead of opening Tk. Existing outputs
+are refused. `--limit-steps 100` makes a labeled partial preview. Fresh rendering
+may introduce tiny floating-point differences; official evaluation logs remain
+authoritative and are never replaced by video metadata.

@@ -56,49 +56,89 @@ def main():
     args = parser.parse_args()
     root = args.root
     manifest = json.loads((root / "manifest.json").read_text())
-    if manifest["state"] != "completed" or any(
-        j["state"] != "completed" for j in manifest["jobs"]
-    ):
-        raise ValueError(
-            "Only completed suites can be published as experiment snapshots"
-        )
+    selection = json.loads((root / "selected-policies.json").read_text())
+    if set(selection) != {"bc", "dagger", "sac", "rlpd"}:
+        raise ValueError("Select exactly one completed policy per method")
+    if manifest["state"] not in {"stopped", "completed"}:
+        raise ValueError("Stop the suite before packaging")
+    datasets, retained, originals, extras = set(), [], [], []
+    inventory = []
     for job in manifest["jobs"]:
         run = Path(job["output"])
-        status = json.loads((run / "status.json").read_text())
-        expected = 0 if job["algo"] == "bc" else job["steps"]
-        if (
-            status["status"] != "completed"
-            or status["step"] != expected
-            or not (run / "checkpoint.pt").exists()
-        ):
-            raise ValueError(f"Incomplete run: {run}")
-    # An explicit allowlist excludes pilots, videos, live viewer state and unrelated local files.
-    datasets = []
-    for job in manifest["jobs"]:
-        config = json.loads(Path(job["config"]).read_text())
+        status_path = run / "status.json"
+        if not status_path.exists():
+            continue
+        status = json.loads(status_path.read_text())
+        config = json.loads((run / "config.json").read_text())
+        chosen = selection.get(config["algo"]) == run.name
         if config.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("Incompatible suite schema")
-        dataset = Path(config["dataset"])
-        datasets.extend([dataset, dataset.with_suffix(".json")])
-    datasets = sorted(set(datasets))
+        if chosen and (
+            status["status"] != "completed"
+            or config["seed"] != 0
+            or status["step"] != (0 if config["algo"] == "bc" else config["steps"])
+        ):
+            raise ValueError(
+                f"Retained policy must be complete, training seed 0: {run}"
+            )
+        inventory.append(
+            {
+                "run": run.name,
+                "retained": chosen,
+                "status": status["status"],
+                "seed": config["seed"],
+            }
+        )
+        files = [
+            p
+            for p in sorted(run.glob("*"))
+            if p.is_file() and p.suffix in {".json", ".jsonl", ".npz"}
+        ]
+        if chosen:
+            import torch
+
+            from kartstudy.playback import load_actor
+
+            actor, actor_config, step = load_actor(run)
+            actor_path = run / "actor.pt"
+            if not actor_path.exists():
+                torch.save(
+                    {"actor": actor.state_dict(), "config": actor_config, "step": step},
+                    actor_path,
+                )
+            retained.extend(files + [actor_path])
+            originals.append(run / "checkpoint.pt")
+            dataset = Path(config["dataset"])
+            datasets.update([dataset, dataset.with_suffix(".json")])
+        else:
+            extras.extend(
+                files
+                + ([run / "checkpoint.pt"] if (run / "checkpoint.pt").exists() else [])
+            )
+    if sum(row["retained"] for row in inventory) != 4:
+        raise ValueError("Missing selected policies")
     metadata = [
-        root / name for name in ["manifest.json", "source.tar.gz", "qualification.json"]
+        root / name
+        for name in [
+            "manifest.json",
+            "source.tar.gz",
+            "qualification.json",
+            "selected-policies.json",
+        ]
     ]
-    run_files = []
-    checkpoints = []
-    run_directories = [Path(j["output"]) for j in manifest["jobs"]]
-    for run in run_directories:
-        for source in sorted(run.glob("*")):
-            if not source.is_file():
-                continue
-            if source.name == "checkpoint.pt":
-                checkpoints.append(source)
-            elif source.suffix in [".json", ".jsonl", ".npz"]:
-                run_files.append(source)
+    metadata += sorted((root / "configs").glob("*.json"))
+    diagnostics = [
+        p
+        for directory in ["runs/expert-road-quality-final", "runs/expert-all-tracks"]
+        for p in Path(directory).glob("*")
+        if p.suffix in {".json", ".csv"}
+    ]
     args.output.mkdir(parents=True, exist_ok=True)
     groups = [
-        ("study-data.zip", datasets + metadata + run_files),
-        ("study-checkpoints.zip", checkpoints),
+        ("selected-policies.zip", retained + [root / "selected-policies.json"]),
+        ("study-data.zip", sorted(datasets) + metadata + diagnostics),
+        ("selected-training-checkpoints.zip", originals),
+        ("extra-policies.zip", extras),
     ]
     if any((args.output / name).exists() for name, _ in groups):
         raise FileExistsError(
@@ -114,20 +154,21 @@ def main():
     (args.output / "SHA256SUMS").write_text(checksums)
     description = {
         "suite": str(root),
-        "completed_runs": len(manifest["jobs"]),
+        "retained_training_seed": 0,
+        "runs": inventory,
         "packaging_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
         ).strip(),
         "packaging_script_sha256": sha256(Path(__file__)),
         "assets": assets,
-        "extraction": "Extract both ZIPs at the repository root; their paths are complementary.",
-        "included": "Demonstration datasets, all completed study runs, expert references and qualification, original training source snapshot, full checkpoints.",
+        "extraction": "Extract selected-policies.zip and study-data.zip at the repository root. Other ZIPs are optional.",
+        "included": "Four retained policies, optional extra and stopped runs, demonstrations, expert diagnostics, original training source snapshot and full checkpoints.",
         "excluded": "Pilot runs, rendered videos, operational launch/PID files and the virtual environment.",
     }
     (args.output / "artifact-manifest.json").write_text(
         json.dumps(description, indent=2) + "\n"
     )
-    print("Verified both ZIP archives and wrote SHA256SUMS.", flush=True)
+    print("Verified release ZIP archives and wrote SHA256SUMS.", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 # Study protocol — shared policies, schema 3
 
-Compare BC, DAgger, online SAC, and RLPD with five independent training seeds
-(0–4). Each run learns one feedforward policy shared across all four training
+Compare BC, DAgger, online SAC, and RLPD using one retained policy per method
+(training seed 0, selected consistently without ranking evaluation performance).
+Additional training-seed checkpoints are excluded from this comparison.
+The original five-seed protocol is preserved in the suite source archive. Each run learns one feedforward policy shared across all four training
 tracks. Track names and difficulty are not policy inputs. Difficulty is used
 only to group reported results. This protocol replaces the
 [three-track schema 2 protocol](protocols/study-schema2.md); existing artifacts
@@ -100,7 +102,9 @@ Report completion, race-time-weighted off-track percentage, native rescues per
 lap, and successful lap time. Keep track length / successful lap time as a
 secondary pace diagnostic. Always report completion beside conditional lap time;
 see [measurement limits](expert-evaluation.md). Average evaluation laps within
-each training run first and bootstrap independent training seeds, never laps.
+each method first. With one retained training run per method, do not report
+training-seed confidence intervals or claim robustness across initializations.
+Repeated evaluation laps measure evaluation variability, not training variability.
 Report each track, each split/difficulty group, and each split overall. Groups
 pool their fixed evaluation laps within each run. A group with no successful
 laps has no conditional lap time. Summaries can contain partial runs; use only

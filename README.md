@@ -18,6 +18,7 @@ measured relative to rows of hazards.
 - [Study protocol](docs/study.md)
 - [Expert metrics and measurement limits](docs/expert-evaluation.md)
 - [Watch policies](docs/visualization.md)
+- [Track difficulty and policy names](docs/tracks-and-policies.md)
 - [Share artifacts](docs/experiment-data.md)
 - [Development and commands](AGENTS.md)
 

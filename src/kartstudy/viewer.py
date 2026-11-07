@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .playback import METHODS, annotated_frame
 
@@ -83,12 +84,22 @@ def show(playback, quit_after_steps=None):
     ttk.Label(root, textvariable=status, padding=(10, 0, 10, 10)).pack(anchor="w")
     fields = [
         ("method", "Policy", 25),
-        ("train_seed", "Training run", 16),
         ("track", "Track", 18),
     ]
     selectors, labels = {}, {}
     paused, speed, photo = False, 1.0, None
     closing, last_step = False, time.perf_counter()
+    executor = ThreadPoolExecutor(max_workers=1)
+    pending = None
+
+    def submit(operation, message="Loading simulator…"):
+        nonlocal pending
+        if pending is not None:
+            return
+        status.set(message)
+        pending = executor.submit(operation)
+        for box in selectors.values():
+            box.configure(state="disabled")
 
     def refresh_image():
         nonlocal photo
@@ -112,14 +123,8 @@ def show(playback, quit_after_steps=None):
             selectors[name].set(dict(options)[getattr(playback, name)])
 
     def change(name):
-        nonlocal last_step
-        try:
-            select(playback, name, labels[name][selectors[name].get()])
-            refresh_choices()
-            refresh_image()
-            last_step = time.perf_counter()
-        except (ValueError, RuntimeError, OSError) as exc:
-            status.set(str(exc))
+        value = labels[name][selectors[name].get()]
+        submit(lambda: select(playback, name, value))
 
     for i, (name, title, width) in enumerate(fields):
         ttk.Label(toolbar, text=title).grid(row=0, column=i, sticky="w", padx=(0, 8))
@@ -133,9 +138,8 @@ def show(playback, quit_after_steps=None):
         if event is not None and event.widget.winfo_class() == "TCombobox":
             return
         if playback.done:
-            playback.restart()
+            submit(playback.restart)
             paused = False
-            refresh_image()
         else:
             paused = not paused
         play.configure(text="Play" if paused else "Pause")
@@ -147,14 +151,12 @@ def show(playback, quit_after_steps=None):
             return
         paused = True
         play.configure(text="Play")
-        playback.step()
-        refresh_image()
+        submit(playback.step, "Stepping…")
         last_step = time.perf_counter()
 
     def restart(event=None):
         nonlocal last_step
-        playback.restart()
-        refresh_image()
+        submit(playback.restart)
         last_step = time.perf_counter()
 
     def change_speed(event=None):
@@ -166,6 +168,11 @@ def show(playback, quit_after_steps=None):
     play.pack(side="left", padx=(0, 8))
     ttk.Button(actions, text="Step →", command=advance).pack(side="left", padx=(0, 8))
     ttk.Button(actions, text="Restart", command=restart).pack(side="left", padx=(0, 16))
+    ttk.Button(
+        actions,
+        text="Reset simulator",
+        command=lambda: submit(playback.reset_simulator, "Starting fresh simulator…"),
+    ).pack(side="left", padx=(0, 16))
     ttk.Label(actions, text="Playback speed").pack(side="left", padx=(0, 8))
     rate = ttk.Combobox(
         actions, state="readonly", values=["0.25×", "0.5×", "1×", "2×", "4×"], width=7
@@ -181,13 +188,28 @@ def show(playback, quit_after_steps=None):
         root.destroy()
 
     def tick():
-        nonlocal last_step
+        nonlocal last_step, pending, paused
         if closing:
+            return
+        if pending is not None:
+            if pending.done():
+                try:
+                    pending.result()
+                    refresh_choices()
+                    refresh_image()
+                except (ValueError, RuntimeError, OSError) as exc:
+                    paused = True
+                    play.configure(text="Play")
+                    status.set(str(exc))
+                pending = None
+                for box in selectors.values():
+                    box.configure(state="readonly")
+                last_step = time.perf_counter()
+            root.after(10, tick)
             return
         now = time.perf_counter()
         if not paused and not playback.done and now - last_step >= 0.1 / speed:
-            playback.step()
-            refresh_image()
+            submit(playback.step, "Playing…")
             last_step = now
         if quit_after_steps is not None and playback.steps >= quit_after_steps:
             close()
@@ -205,5 +227,7 @@ def show(playback, quit_after_steps=None):
     try:
         root.mainloop()
     finally:
+        playback.close()
+        executor.shutdown(wait=False, cancel_futures=True)
         if not closing:
             root.destroy()
