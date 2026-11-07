@@ -97,3 +97,60 @@ def test_remote_timeout_is_bounded_and_closes_stalled_worker():
     with pytest.raises(RuntimeError, match="Reset simulator"):
         playback._request("start", {})
     assert closed == [True]
+
+
+def test_viewer_steps_do_not_toggle_controls_or_status(monkeypatch):
+    from types import SimpleNamespace
+
+    tk = pytest.importorskip("tkinter")
+    from tkinter import ttk
+
+    from PIL import Image
+
+    from kartstudy import viewer
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk display unavailable")
+    root.withdraw()
+    monkeypatch.setattr(tk, "Tk", lambda: root)
+    updates, messages = [], []
+    original_configure = ttk.Combobox.configure
+    original_set = tk.StringVar.set
+
+    def configure(self, *args, **kwargs):
+        updates.append(kwargs.copy())
+        return original_configure(self, *args, **kwargs)
+
+    def set_text(self, value):
+        messages.append(value)
+        return original_set(self, value)
+
+    monkeypatch.setattr(ttk.Combobox, "configure", configure)
+    monkeypatch.setattr(tk.StringVar, "set", set_text)
+    monkeypatch.setattr(
+        viewer, "annotated_frame", lambda playback: Image.new("RGB", (640, 360))
+    )
+    playback = SimpleNamespace(
+        method="dagger",
+        track="lighthouse",
+        train_seed=0,
+        eval_seed=20000,
+        checkpoint_step=400000,
+        tracks=["lighthouse"],
+        catalog={("lighthouse", "dagger", 0): None},
+        done=False,
+        steps=0,
+        close=lambda: None,
+    )
+
+    def step():
+        playback.steps += 1
+
+    playback.step = step
+    viewer.show(playback, quit_after_steps=3)
+    assert playback.steps >= 3
+    assert not any("state" in update for update in updates)
+    assert sum("values" in update for update in updates) == 2  # Initial selectors only.
+    assert len(messages) == 1  # Stable status throughout playback.

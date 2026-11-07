@@ -91,29 +91,41 @@ def show(playback, quit_after_steps=None):
     closing, last_step = False, time.perf_counter()
     executor = ThreadPoolExecutor(max_workers=1)
     pending = None
+    pending_loading = False
+    queued = None
 
-    def submit(operation, message="Loading simulator…"):
-        nonlocal pending
+    def submit(operation, message="Loading simulator…", *, loading=True):
+        nonlocal pending, pending_loading, queued
         if pending is not None:
+            if loading:
+                queued = (operation, message)
             return
-        status.set(message)
+        pending_loading = loading
+        if loading:
+            status.set(message)
+            for box in selectors.values():
+                box.configure(state="disabled")
         pending = executor.submit(operation)
-        for box in selectors.values():
-            box.configure(state="disabled")
 
     def refresh_image():
         nonlocal photo
-        photo = ImageTk.PhotoImage(annotated_frame(playback), master=root)
-        picture.configure(image=photo)
+        frame = annotated_frame(playback)
+        if photo is None:
+            photo = ImageTk.PhotoImage(frame, master=root)
+            picture.configure(image=photo)
+        else:
+            photo.paste(frame)
         checkpoint = (
             "Expert reference"
             if playback.checkpoint_step is None
             else f"{playback.checkpoint_step:,} training steps"
         )
-        status.set(
+        text = (
             f"{checkpoint}  ·  evaluation seed {playback.eval_seed}  ·  "
             "Deterministic policy; collection noise is off"
         )
+        if status.get() != text:
+            status.set(text)
 
     def refresh_choices():
         for name, _, _ in fields:
@@ -151,7 +163,7 @@ def show(playback, quit_after_steps=None):
             return
         paused = True
         play.configure(text="Play")
-        submit(playback.step, "Stepping…")
+        submit(playback.step, loading=False)
         last_step = time.perf_counter()
 
     def restart(event=None):
@@ -188,28 +200,34 @@ def show(playback, quit_after_steps=None):
         root.destroy()
 
     def tick():
-        nonlocal last_step, pending, paused
+        nonlocal last_step, pending, paused, queued
         if closing:
             return
         if pending is not None:
             if pending.done():
                 try:
                     pending.result()
-                    refresh_choices()
+                    if pending_loading:
+                        refresh_choices()
                     refresh_image()
                 except (ValueError, RuntimeError, OSError) as exc:
                     paused = True
                     play.configure(text="Play")
                     status.set(str(exc))
                 pending = None
-                for box in selectors.values():
-                    box.configure(state="readonly")
+                if pending_loading:
+                    for box in selectors.values():
+                        box.configure(state="readonly")
                 last_step = time.perf_counter()
+                if queued is not None:
+                    operation, message = queued
+                    queued = None
+                    submit(operation, message)
             root.after(10, tick)
             return
         now = time.perf_counter()
         if not paused and not playback.done and now - last_step >= 0.1 / speed:
-            submit(playback.step, "Playing…")
+            submit(playback.step, loading=False)
             last_step = now
         if quit_after_steps is not None and playback.steps >= quit_after_steps:
             close()
