@@ -1,4 +1,3 @@
-import importlib
 import json
 from types import ModuleType, SimpleNamespace
 
@@ -380,14 +379,9 @@ def test_export_frames_visibly_label_partial_range_and_retain_seeds(
 )
 def test_cli_snapshot_directories_reach_real_selector(tmp_path, monkeypatch, selection):
     import torch
-
-    try:
-        replay = importlib.import_module("kartstudy.spectator_replay")
-    except ModuleNotFoundError as exc:
-        if exc.name != "kartstudy.spectator_replay":
-            raise
-        pytest.skip("The replay worker is absent from this isolated UI branch")
     from kartstudy.snapshots import export_actor_snapshot
+
+    from kartstudy import spectator_replay as replay
 
     run = tmp_path / "run"
     actor = SimpleNamespace(state_dict=lambda: {"weight": torch.tensor([1.0, 2.0])})
