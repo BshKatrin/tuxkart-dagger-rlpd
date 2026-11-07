@@ -76,7 +76,7 @@ class FakeEnv:
             {
                 "success": self.resets == 1,
                 "finish_time": 1.2,
-                "executed_action": np.zeros(5),
+                "executed_action": np.array([0.25, 0.5, -1, 1, -1]),
             },
         )
 
@@ -93,18 +93,27 @@ def test_capture_initial_terminal_failed_laps_and_freezing(
         tmp_path / "comparison", root=actors, max_steps=3
     )
     assert result.track == "lighthouse" and result.seed == 20000
-    assert result.manifest["laps"]["bc-s0"]["checkpoint_updates"] == 12
+    assert result.manifest["laps"]["bc"]["checkpoint_updates"] == 12
+    assert [g["key"] for g in result.ghosts] == ["bc", "dagger", "sac", "rlpd"]
     assert len(FakeEnv.instances[-1:]) == 1 and FakeEnv.instances[-1].resets == 4
     assert FakeEnv.instances[-1].closed
     statuses = [p["status"] for p in result.sample(result.duration + 10)]
     assert statuses == ["finished", "timeout", "stopped", "timeout"]
-    assert result.manifest["laps"]["sac-s0"]["error"]["message"] == "fixture failure"
-    assert result.manifest["laps"]["dagger-s0"]["lap_time"] is None
+    assert result.manifest["laps"]["sac"]["error"]["message"] == "fixture failure"
+    assert result.manifest["laps"]["dagger"]["lap_time"] is None
     assert result.sample(-1)[0]["position"] == [0, 2, 3]
     assert result.sample(99)[0]["position"] == [3, 2, 3]
     assert before == {p: file_hash(p) for p in before}
-    with np.load(result.path / "bc-s0.npz") as arrays:
+    with np.load(result.path / "bc.npz") as arrays:
         assert len(arrays["time"]) == 4 and np.all(np.diff(arrays["time"]) > 0)
+        np.testing.assert_array_equal(
+            arrays["executed_action"][1:], [[0.25, 0.5, -1, 1, -1]] * 3
+        )
+        np.testing.assert_array_equal(
+            arrays["action_applied"], [False, True, True, True]
+        )
+        np.testing.assert_array_equal(arrays["terminated"], [False, False, False, True])
+        assert not arrays["truncated"].any()
         np.testing.assert_array_equal(arrays["native_time"], [-1, -1, 0, 0.1])
     with pytest.raises(FileExistsError):
         replay.capture_comparison(result.path, root=actors)
@@ -211,7 +220,7 @@ def test_rescue_discontinuity_holds_pose_until_native_sample(
     assert crossing["rotation"] == before["rotation"] == [0, 0, 0, 1]
     assert result.sample(0.2)[0]["position"] == [102, 2, 3]
     assert result.sample(0.25)[0]["position"] == [102, 2, 3]
-    with np.load(result.path / "bc-s0.npz") as arrays:
+    with np.load(result.path / "bc.npz") as arrays:
         np.testing.assert_array_equal(
             arrays["rescue_active"], [False, False, True, False]
         )
@@ -234,3 +243,16 @@ def test_unflagged_teleport_also_disables_interpolation():
         rows, {"native_time": 0.1, "position": [100, 0, 0], "speed": 1}, 0, False
     )
     assert rows[-1]["discontinuity"] and not rows[-1]["rescue_active"]
+
+
+def test_bc_snapshot_label_leads_with_fitting_updates(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "DrivingEnv", FakeEnv)
+    config = {"algo": "bc", "seed": 0, "hidden": 8, "schema_version": SCHEMA_VERSION}
+    snapshot = export_actor_snapshot(
+        tmp_path / "run", Policy(3, hidden=8), config, 0, 8000
+    )
+    result = replay.capture_comparison(
+        tmp_path / "comparison", snapshots=[snapshot], methods=("bc",), max_steps=3
+    )
+    assert result.ghosts[0]["key"] == "bc-s0-actions-0-updates-8000"
+    assert result.ghosts[0]["label"] == "Behavior cloning · 8000 fitting updates"

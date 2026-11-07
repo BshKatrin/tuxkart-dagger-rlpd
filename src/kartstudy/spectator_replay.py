@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .environment import DrivingEnv
+from .environment import ACTION_KEYS, DrivingEnv
 from .native_telemetry import SOURCE_SHA256
 from .playback import METHODS, discover_runs, load_actor
 from .snapshots import actor_hash, file_hash, source_identity
@@ -26,7 +26,15 @@ def _json_value(value):
     raise TypeError(f"Unsupported manifest value: {type(value).__name__}")
 
 
-def _append_pose(rows, pose, steer, rescue_active):
+def _append_pose(
+    rows,
+    pose,
+    steer,
+    rescue_active,
+    executed_action=None,
+    terminated=False,
+    truncated=False,
+):
     previous = rows[-1]
     delta = pose["native_time"] - previous["native_time"]
     interval = delta if delta > 0 else 0.1
@@ -45,6 +53,12 @@ def _append_pose(rows, pose, steer, rescue_active):
             "steer": float(steer),
             "rescue_active": bool(rescue_active),
             "discontinuity": discontinuity,
+            "executed_action": np.asarray(
+                executed_action if executed_action is not None else [0] * 5, dtype=float
+            ).tolist(),
+            "action_applied": executed_action is not None,
+            "terminated": bool(terminated),
+            "truncated": bool(truncated),
         }
     )
 
@@ -99,6 +113,10 @@ class ReplayComparison:
                         "steer",
                         "rescue_active",
                         "discontinuity",
+                        "executed_action",
+                        "action_applied",
+                        "terminated",
+                        "truncated",
                     )
                 }
             n = len(trace["time"])
@@ -123,9 +141,20 @@ class ReplayComparison:
                 np.linalg.norm(trace["rotation"], axis=1) == 0
             ):
                 raise ValueError("Invalid replay time/orientation")
-            for name in ("rescue_active", "discontinuity"):
+            for name in (
+                "rescue_active",
+                "discontinuity",
+                "action_applied",
+                "terminated",
+                "truncated",
+            ):
                 if trace[name].shape != (n,) or trace[name].dtype != np.bool_:
                     raise ValueError(f"Invalid replay {name}")
+            if (
+                trace["executed_action"].shape != (n, len(ACTION_KEYS))
+                or not np.isfinite(trace["executed_action"]).all()
+            ):
+                raise ValueError("Invalid replay executed controls")
             self._traces[ghost["key"]] = trace
         self.duration = max(
             (float(t["time"][-1]) for t in self._traces.values()), default=0.0
@@ -249,6 +278,9 @@ def capture_comparison(
         "orientation_source": "pysupertuxkart2 0.7.4 inverse wxyz conjugated to world xyzw",
         "time_policy": "native positive deltas; countdown/duplicate times advance by control interval",
         "control_interval_seconds": 0.1,
+        "action_keys": list(ACTION_KEYS),
+        "disabled_controls": {"drift": 0, "rescue": 0},
+        "action_alignment": "row stores controls leading into pose; initial and failed-step terminal rows have action_applied=false",
         "discontinuity_policy": "hold previous pose across rescue-active boundaries or displacement > max(10 m, 3 * speed * interval)",
         "source": source,
         "native_binary_sha256": file_hash(pystk2.__file__),
@@ -278,12 +310,18 @@ def capture_comparison(
                 json.loads(status_file.read_text()) if status_file.exists() else {}
             )
             updates = state.get("updates", counters.get("updates"))
-            key = f"{method}-s{train_seed}" + (
-                f"-actions-{steps}-updates-{updates}" if milestone else ""
+            key = (
+                f"{method}-s{train_seed}-actions-{steps}-updates-{updates}"
+                if milestone
+                else method
             )
-            label = METHODS[method] + (
-                f" · {steps} actions / {updates} updates" if milestone else ""
-            )
+            label = METHODS[method]
+            if milestone:
+                label += (
+                    f" · {updates} fitting updates"
+                    if method == "bc"
+                    else f" · {steps} collected actions / {updates} updates"
+                )
             ghost = {
                 "key": key,
                 "label": label,
@@ -326,6 +364,10 @@ def capture_comparison(
                         "steer": 0.0,
                         "rescue_active": bool(reset_info.get("rescue_active", False)),
                         "discontinuity": False,
+                        "executed_action": [0.0] * 5,
+                        "action_applied": False,
+                        "terminated": False,
+                        "truncated": False,
                     }
                 )
                 with torch.inference_mode():
@@ -344,6 +386,9 @@ def capture_comparison(
                             pose,
                             info.get("executed_action", action)[0],
                             info.get("rescue_active", False),
+                            executed_action=info.get("executed_action", action),
+                            terminated=term,
+                            truncated=trunc,
                         )
                         lap["steps"] = index + 1
                         if term or trunc:
@@ -392,7 +437,14 @@ def capture_comparison(
                             name: np.asarray(
                                 [r[name] for r in rows],
                                 dtype=bool
-                                if name in ("rescue_active", "discontinuity")
+                                if name
+                                in (
+                                    "rescue_active",
+                                    "discontinuity",
+                                    "action_applied",
+                                    "terminated",
+                                    "truncated",
+                                )
                                 else np.float64,
                             )
                             for name in (
@@ -404,6 +456,10 @@ def capture_comparison(
                                 "steer",
                                 "rescue_active",
                                 "discontinuity",
+                                "executed_action",
+                                "action_applied",
+                                "terminated",
+                                "truncated",
                             )
                         },
                     )
