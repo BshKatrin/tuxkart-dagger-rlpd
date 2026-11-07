@@ -208,7 +208,13 @@ def _native_acceptance(track, proof):
         # is evidenced separately by native transforms and per-model pixel changes.
         assert np.mean(np.abs(hidden.astype(float) - empty)) < 2
         spectator.set_ghost_poses(poses)
+        # Force failure after RTT activation and GL readback state changes.
+        spectator._native.kartstudy_spectator_test_fail_next_render(spectator._handle)
+        with pytest.raises(RuntimeError, match="Injected native render failure"):
+            spectator.render()
+        # Finally closes this failed renderer, then the reload loop proves teardown.
         diag = spectator.diagnostics()
+        diag["forced_render_failure"] = "injected after target activation"
         diag["individual_visible_pixels"] = sorted(visible_pixels)
         diag["orientation_max_errors"] = orientation_errors
         diag["geometry_segment_count"] = len(segments)
@@ -223,6 +229,11 @@ def _native_acceptance(track, proof):
         with NativeSpectator(reload_track, configs, width=320, height=180) as reloaded:
             assert reloaded.render().shape == (180, 320, 3)
             assert reloaded.diagnostics()["physical_kart_count_after"] == 1
+    evidence_path = proof / f"{track}-acceptance.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["forced_failure_close_reload_verified"] = True
+    evidence["successful_world_loads"] = 5
+    evidence_path.write_text(json.dumps(evidence, indent=2))
 
 
 if __name__ == "__main__":

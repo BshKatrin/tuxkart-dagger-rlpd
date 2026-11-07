@@ -122,13 +122,16 @@ def load_adapter():
         "ghost_state": [ctypes.c_void_p, ctypes.c_int, float_p],
         "camera_state": [ctypes.c_void_p, float_p],
         "destroy": [ctypes.c_void_p],
+        "test_fail_next_render": [ctypes.c_void_p],
         "release_players": [],
     }
     for name, arguments in definitions.items():
         function = getattr(native, f"kartstudy_spectator_{name}")
         function.argtypes = arguments
         function.restype = (
-            None if name in ("destroy", "release_players") else ctypes.c_int
+            None
+            if name in ("destroy", "release_players", "test_fail_next_render")
+            else ctypes.c_int
         )
     fingerprint["build_fingerprint"] = build_key
     return native, fingerprint
