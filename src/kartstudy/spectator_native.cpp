@@ -1,5 +1,6 @@
 // Presentation-only adapter against checksum-verified PySuperTuxKart2 0.7.4 headers.
 #include "modes/world.hpp"
+#include "states_screens/state_manager.hpp"
 #include "karts/abstract_kart.hpp"
 #include "karts/kart_model.hpp"
 #include "karts/kart_properties.hpp"
@@ -11,7 +12,6 @@
 #include "ge_render_info.hpp"
 #include "ISceneManager.h"
 #include "ICameraSceneNode.h"
-#include "quaternion.h"
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -42,8 +42,16 @@ template<class F> int checked(F f) {
 }
 extern "C" {
 const char* kartstudy_spectator_error() { return error.c_str(); }
+void kartstudy_spectator_release_players() {
+    // PySTK cleanup deletes profiles but leaves StateManager active-player pointers.
+    // Drop these owned presentation players before deleting their profiles.
+    StateManager::get()->resetActivePlayers();
+}
 int kartstudy_spectator_count() {
     auto w = World::getWorld(); return w ? (int)w->getNumKarts() : -1;
+}
+double kartstudy_spectator_time() {
+    auto w = World::getWorld(); return w ? w->getTime() : -1;
 }
 int kartstudy_spectator_ticks() {
     auto w = World::getWorld(); return w ? w->getTicksSinceStart() : -1;
@@ -101,13 +109,36 @@ int kartstudy_spectator_pose(void* handle, int index, const float* pos,
                             const float* xyzw, float speed, float steer, int visible) {
     return checked([&] {
         auto& g = *static_cast<Presentation*>(handle)->ghosts.at(index);
-        irr::core::quaternion q(xyzw[0], xyzw[1], xyzw[2], xyzw[3]);
-        irr::core::vector3df angles; q.toEuler(angles);
+        btQuaternion q(xyzw[0], xyzw[1], xyzw[2], xyzw[3]);
+        // Match Moveable::updateGraphics, including its 90-degree singularity guard.
+        if (btFuzzyZero(q.getX()) && btFuzzyZero(q.getY()-0.70710677f) &&
+            btFuzzyZero(q.getZ()) && btFuzzyZero(q.getW()-0.70710677f))
+            q.setX(0.000001f);
+        Vec3 angles; angles.setHPR(q);
         g.node->setPosition({pos[0], pos[1], pos[2]});
-        g.node->setRotation(angles * irr::core::RADTODEG);
+        g.node->setRotation(angles.toIrrHPR());
         g.model->update(0, 0, steer, speed, 0);
         g.node->setVisible(visible != 0);
         g.node->updateAbsolutePosition();
+    });
+}
+int kartstudy_spectator_camera_state(void* handle, float* out) {
+    return checked([&] {
+        auto c = static_cast<Presentation*>(handle)->camera;
+        auto pos = c->getPosition(); auto target = c->getTarget();
+        out[0] = pos.X; out[1] = pos.Y; out[2] = pos.Z;
+        out[3] = target.X; out[4] = target.Y; out[5] = target.Z;
+        out[6] = c->getFOV();
+    });
+}
+int kartstudy_spectator_ghost_state(void* handle, int index, float* out) {
+    return checked([&] {
+        auto node = static_cast<Presentation*>(handle)->ghosts.at(index)->node;
+        auto pos = node->getPosition();
+        irr::core::vector3df forward(0, 0, 1);
+        node->getAbsoluteTransformation().rotateVect(forward);
+        out[0] = pos.X; out[1] = pos.Y; out[2] = pos.Z;
+        out[3] = forward.X; out[4] = forward.Y; out[5] = forward.Z;
     });
 }
 int kartstudy_spectator_render(void* handle, unsigned char* rgb) {
