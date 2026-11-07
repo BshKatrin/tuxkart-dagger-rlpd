@@ -1,3 +1,4 @@
+import importlib
 import json
 from types import ModuleType, SimpleNamespace
 
@@ -358,7 +359,7 @@ def test_export_frames_visibly_label_partial_range_and_retain_seeds(
     labels = [bounds for value, bounds in drawn if value.startswith("PARTIAL PREVIEW")]
     assert len(labels) == (result["frame_count"] if preview else 0)
     if preview:
-        expected = f"PARTIAL PREVIEW · clip {start:.2f}–{end:.2f} s of 0.20 s"
+        expected = f"PARTIAL PREVIEW · clip {start:.2f} to {end:.2f} s of 0.20 s"
         assert sum(value == expected for value, _ in drawn) == result["frame_count"]
     seed_labels = [
         bounds
@@ -372,3 +373,59 @@ def test_export_frames_visibly_label_partial_range_and_retain_seeds(
     )
     assert result["preview_only"] is preview
     assert result["start_seconds"] == start and result["end_seconds"] == end
+
+
+@pytest.mark.parametrize(
+    "selection", ["snapshot_root", "run_root", "single", "multiple"]
+)
+def test_cli_snapshot_directories_reach_real_selector(tmp_path, monkeypatch, selection):
+    import torch
+
+    try:
+        replay = importlib.import_module("kartstudy.spectator_replay")
+    except ModuleNotFoundError as exc:
+        if exc.name != "kartstudy.spectator_replay":
+            raise
+        pytest.skip("The replay worker is absent from this isolated UI branch")
+    from kartstudy.snapshots import export_actor_snapshot
+
+    run = tmp_path / "run"
+    actor = SimpleNamespace(state_dict=lambda: {"weight": torch.tensor([1.0, 2.0])})
+    config = {"algo": "dagger", "seed": 0}
+    snapshots = [
+        export_actor_snapshot(run, actor, config, steps, updates)
+        for steps, updates in ((100, 10), (200, 20))
+    ]
+    if selection == "snapshot_root":
+        arguments, expected = [run / "snapshots"], snapshots
+    elif selection == "run_root":
+        arguments, expected = [run], snapshots
+    elif selection == "single":
+        arguments, expected = snapshots[:1], snapshots[:1]
+    else:
+        arguments, expected = snapshots, snapshots
+
+    def select_only(output, **kwargs):
+        # Exercise the real selection boundary without starting a simulator or actor.
+        return replay._selections(
+            kwargs["root"],
+            kwargs["track"],
+            kwargs["methods"],
+            kwargs["train_seed"],
+            kwargs["snapshots"],
+        )
+
+    monkeypatch.setattr(replay, "capture_comparison", select_only)
+    selected = spectator.main(
+        [
+            "capture",
+            str(tmp_path / "comparison"),
+            "--root",
+            str(run),
+            "--methods",
+            "dagger",
+            "--snapshots",
+            *(str(path) for path in arguments),
+        ]
+    )
+    assert selected == [("dagger", path, True) for path in expected]

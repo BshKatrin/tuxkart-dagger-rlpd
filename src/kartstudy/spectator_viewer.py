@@ -151,7 +151,7 @@ def annotated_frame(frame, metadata, ghosts, geometry, track):
         y += line
         draw.text(
             (10, y),
-            f"PARTIAL PREVIEW · clip {metadata['start_seconds']:.2f}–{metadata['end_seconds']:.2f} s of {metadata['replay_duration_seconds']:.2f} s",
+            f"PARTIAL PREVIEW · clip {metadata['start_seconds']:.2f} to {metadata['end_seconds']:.2f} s of {metadata['replay_duration_seconds']:.2f} s",
             font=font,
             fill="#ffc766",
         )
