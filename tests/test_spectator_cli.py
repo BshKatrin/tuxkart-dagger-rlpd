@@ -210,13 +210,15 @@ def install_replay_fixture(monkeypatch, comparison):
 def test_cli_capture_dispatch_and_defaults(monkeypatch, comparison, tmp_path):
     install_replay_fixture(monkeypatch, comparison)
     result = spectator.main(["capture", str(tmp_path / "replay")])
-    assert result["methods"] == ("bc", "dagger", "sac", "rlpd")
+    assert result["methods"] is None  # Resolve actors from the actual installation.
     assert result["eval_seed"] == 20000 and result["train_seed"] == 0
     assert result["root"] == "runs/study-polar-four" and result["track"] == "lighthouse"
     result = spectator.main(
         ["capture", "replay", "--methods", "dagger", "--snapshots", "checkpoint.pt"]
     )
     assert result["snapshots"] == "checkpoint.pt" and result["methods"] == ("dagger",)
+    result = spectator.main(["capture", "replay", "--methods", "sac", "sac_sym"])
+    assert result["methods"] == ("sac", "sac_sym")
 
 
 def test_cli_view_and_export_dispatch_config(monkeypatch, comparison, tmp_path):

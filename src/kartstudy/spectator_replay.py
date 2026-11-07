@@ -16,7 +16,7 @@ from .spectator_contract import GhostConfig, GhostPose
 
 FORMAT_VERSION = 2
 TIME_POLICY = "time=max(native_time, 0); countdown never advances race time; action_time counts completed 0.1-second control steps"
-COLORS = {"bc": 0.08, "dagger": 0.56, "sac": 0.0, "rlpd": 0.33}
+COLORS = {"bc": 0.08, "dagger": 0.56, "sac": 0.0, "sac_sym": 0.78, "rlpd": 0.33}
 
 
 def _json_value(value):
@@ -283,6 +283,23 @@ class ReplayComparison:
 def _selections(root, track, methods, train_seed, snapshots):
     if snapshots is None:
         catalog = discover_runs(root)
+        if methods is None:
+            methods = tuple(
+                method
+                for method in COLORS
+                if (track, method, int(train_seed)) in catalog
+            )
+        if not methods:
+            raise ValueError(
+                "No completed spectator actors available at this training seed"
+            )
+        missing = [
+            method
+            for method in methods
+            if (track, method, int(train_seed)) not in catalog
+        ]
+        if missing:
+            raise ValueError(f"No completed spectator actor for: {', '.join(missing)}")
         return [
             (method, catalog[(track, method, int(train_seed))], False)
             for method in methods
@@ -307,7 +324,11 @@ def _selections(root, track, methods, train_seed, snapshots):
     for path in paths:
         manifest = json.loads((path / "manifest.json").read_text())
         method = manifest["config"]["algo"]
-        if method not in methods or manifest["config"]["seed"] != int(train_seed):
+        if (
+            method not in COLORS
+            or (methods is not None and method not in methods)
+            or manifest["config"]["seed"] != int(train_seed)
+        ):
             raise ValueError("Snapshot method/training seed does not match selection")
         if file_hash(path / "actor.pt") != manifest["actor_file_sha256"]:
             raise ValueError("Snapshot checksum mismatch")
@@ -322,7 +343,7 @@ def capture_comparison(
     output,
     root="runs/study-polar-four",
     track="lighthouse",
-    methods=("bc", "dagger", "sac", "rlpd"),
+    methods=None,
     eval_seed=20000,
     train_seed=0,
     snapshots=None,
@@ -332,12 +353,16 @@ def capture_comparison(
 
     ``snapshots`` accepts one run/snapshot-root directory or an iterable of
     selected snapshot directories. Returns a loaded ``ReplayComparison``.
+    Omitted methods select available completed actors at the requested training
+    seed, or the methods in supplied snapshots. Explicit selections remain strict.
     Failed lap poses and errors are retained with status ``stopped``.
     """
     output = Path(output)
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite {output}")
-    if max_steps < 1 or not methods or any(m not in COLORS for m in methods):
+    if max_steps < 1 or (
+        methods is not None and (not methods or any(m not in COLORS for m in methods))
+    ):
         raise ValueError("Require positive max_steps and known methods")
     selections = _selections(root, track, methods, train_seed, snapshots)
     if len({str(path.resolve()) for _, path, _ in selections}) != len(selections):

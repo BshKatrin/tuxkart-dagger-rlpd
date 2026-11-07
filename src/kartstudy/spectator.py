@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .spectator_camera import CAMERA_MODES, CameraSettings
 
-METHODS = ("bc", "dagger", "sac", "rlpd")
+METHODS = ("bc", "dagger", "sac", "sac_sym", "rlpd")
 
 
 def parser():
@@ -19,7 +19,12 @@ def parser():
     capture.add_argument("output", type=Path)
     capture.add_argument("--root", default="runs/study-polar-four")
     capture.add_argument("--track", default="lighthouse")
-    capture.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    capture.add_argument(
+        "--methods",
+        nargs="+",
+        choices=METHODS,
+        help="Methods to record (default: all available completed actors at this seed)",
+    )
     capture.add_argument("--eval-seed", type=int, default=20000)
     capture.add_argument("--train-seed", type=int, default=0)
     capture.add_argument(
@@ -111,7 +116,7 @@ def main(argv=None):
                 args.output,
                 root=args.root,
                 track=args.track,
-                methods=tuple(args.methods),
+                methods=tuple(args.methods) if args.methods else None,
                 eval_seed=args.eval_seed,
                 train_seed=args.train_seed,
                 snapshots=(

@@ -126,3 +126,51 @@ fixed evaluation seeds are unchanged. This matches the demonstration budget of t
 so SAC versus SAC symmetric sampling isolates the sampling change.
 Its artifacts and source snapshot live separately from the stopped main suite;
 its result is not included in the four-policy release.
+
+## Five-method comparison and reward-method replication
+
+The separate five-method comparison adds the completed 20-demo `sac_sym`
+ablation to the retained BC, DAgger, SAC and RLPD policies. It preserves the
+four-policy release and its protocol above. SAC versus `sac_sym` isolates
+50/50 sampling; `sac_sym` versus RLPD also changes critic count, critic layer
+normalization and update-to-data ratio. These are fixed-budget comparisons,
+not equal-compute comparisons.
+
+Generate the comparison from explicit completed run directories; choose a
+fresh output directory each time:
+
+```sh
+uv run --locked python scripts/compare_methods.py \
+  --runs runs/study-polar-four/shared_bc_s0 \
+         runs/study-polar-four/shared_dagger_s0 \
+         runs/study-polar-four/shared_sac_s0 \
+         runs/ablation-sac-sym-demo20/sac_sym_s0 \
+         runs/study-polar-four/shared_rlpd_s0 \
+  --output runs/analysis/five-method-seed0-new
+```
+
+The command verifies schema, budgets, complete assessment grids, dataset
+checksum and dependency versions. It writes final results by track,
+split/difficulty and split; recorded training curves; compute counters; JSON,
+CSV and Markdown tables; PNG/SVG figures; input provenance and output checksums.
+It refuses stopped runs, duplicate method/seed pairs, edited inputs and existing
+outputs. `--no-figures` retains the tables and provenance.
+
+For replication, retain seed 0 unchanged and train SAC, `sac_sym` and RLPD at
+seeds 1 and 2 in a separate source snapshot and output directory. Preserve the
+same demonstration checksum, four training tracks, 100,000 actions per track,
+400,000-action total, 40,000-action assessments and 13-track final evaluation.
+BC and DAgger remain at one training seed. Add a replication run to `--runs`
+only after its final assessment and completed status are available; every
+figure and table must retain the resulting unequal method seed counts.
+
+Pool evaluation laps within each training run, using
+`sum(off_track_seconds) / sum(measurement_seconds)`, then average independent
+training runs equally. Bootstrap training runs, never evaluation laps. A single
+training seed has no training-seed interval; intervals from three seeds remain
+exploratory. Conditional lap time excludes failed laps and has no estimate for
+a seed with zero completions; retain completion denominators and the number of
+seeds contributing to each metric. Do not substitute launcher progress summaries
+for these final statistics. BC's fitted assessment is a reference point, not a
+historical online learning curve. Genuine evolution replays use recorded actor
+snapshots from new runs; final actors cannot reconstruct past training states.

@@ -168,7 +168,7 @@ class RemoteSpectator:
                 self._spawn()
             if visible is None:
                 # Capture's default keys; CLI resolves the full list before view/export.
-                visible = ("bc", "dagger", "sac", "rlpd")
+                visible = ("bc", "dagger", "sac", "sac_sym", "rlpd")
             return self._request(
                 "load",
                 {
@@ -193,7 +193,7 @@ class RemoteSpectator:
         request = self.last_request or {
             "time": 0.0,
             "camera": CameraSettings().to_dict(),
-            "visible": ["bc", "dagger", "sac", "rlpd"],
+            "visible": ["bc", "dagger", "sac", "sac_sym", "rlpd"],
         }
         return self.load(
             camera or CameraSettings(**request["camera"]),

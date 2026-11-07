@@ -119,6 +119,68 @@ def test_capture_initial_terminal_failed_laps_and_freezing(
         replay.capture_comparison(result.path, root=actors)
 
 
+def test_capture_discovers_completed_fifth_actor_and_preserves_colors(
+    tmp_path, actors, monkeypatch
+):
+    monkeypatch.setattr(replay, "DrivingEnv", FakeEnv)
+    fifth = actors / "sac_sym"
+    fifth.mkdir()
+    state = torch.load(actors / "sac" / "actor.pt", weights_only=True)
+    state["config"]["algo"] = "sac_sym"
+    torch.save(state, fifth / "actor.pt")
+    (fifth / "config.json").write_text(json.dumps(state["config"]))
+    (fifth / "status.json").write_text(
+        json.dumps({"status": "completed", "updates": 12})
+    )
+    before = {path: file_hash(path) for path in actors.rglob("actor.pt")}
+    result = replay.capture_comparison(tmp_path / "five", root=actors, max_steps=3)
+    assert [g["key"] for g in result.ghosts] == [
+        "bc",
+        "dagger",
+        "sac",
+        "sac_sym",
+        "rlpd",
+    ]
+    ghost = next(g for g in result.ghosts if g["key"] == "sac_sym")
+    assert ghost["label"] == "SAC + symmetric sampling" and ghost["color"] == 0.78
+    assert {g["key"]: g["color"] for g in result.ghosts if g["key"] != "sac_sym"} == {
+        "bc": 0.08,
+        "dagger": 0.56,
+        "sac": 0.0,
+        "rlpd": 0.33,
+    }
+    assert result.manifest["laps"]["sac_sym"]["checkpoint_updates"] == 12
+    assert before == {path: file_hash(path) for path in before}
+    assert FakeEnv.instances[-1].resets == 5 and FakeEnv.instances[-1].closed
+
+
+def test_explicit_missing_fifth_actor_fails_before_creating_output(tmp_path, actors):
+    output = tmp_path / "missing"
+    with pytest.raises(ValueError, match="sac_sym"):
+        replay.capture_comparison(output, root=actors, methods=("sac", "sac_sym"))
+    assert not output.exists()
+
+
+def test_symmetric_sampling_snapshot_capture_infers_method(tmp_path, monkeypatch):
+    monkeypatch.setattr(replay, "DrivingEnv", FakeEnv)
+    config = {
+        "algo": "sac_sym",
+        "seed": 0,
+        "hidden": 8,
+        "schema_version": SCHEMA_VERSION,
+    }
+    snapshot = export_actor_snapshot(
+        tmp_path / "run", Policy(3, hidden=8), config, 40, 32
+    )
+    result = replay.capture_comparison(
+        tmp_path / "evolution", snapshots=[snapshot], max_steps=3
+    )
+    ghost = result.ghosts[0]
+    assert ghost["method"] == "sac_sym" and ghost["color"] == 0.78
+    assert "SAC + symmetric sampling" in ghost["label"]
+    assert "40 collected actions / 32 updates" in ghost["label"]
+
+
 def test_world_orientation_is_conjugated_wxyz_without_simulator():
     env = DrivingEnv.__new__(DrivingEnv)
     q = np.array([np.sqrt(0.5), 0, -np.sqrt(0.5), 0])

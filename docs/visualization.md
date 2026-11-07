@@ -48,7 +48,7 @@ authoritative and are never replaced by video metadata.
 
 ## Native ghost comparisons
 
-The spectator shows frozen BC, DAgger, SAC and RLPD solo laps together in the
+The spectator shows frozen BC, DAgger, SAC, SAC + symmetric sampling and RLPD solo laps together in the
 original textured SuperTuxKart scenery. Each ghost is a copied native kart model
 without a physics body. Replay rendering changes camera and model transforms;
 it runs neither the actors nor simulation steps. The engine's one hidden kart
@@ -82,8 +82,10 @@ uv run python -m kartstudy.spectator export runs/visualizations/lighthouse-compa
 ```
 
 Capture runs each selected actor sequentially with deterministic CPU inference
-in the unmodified solo task. Defaults select the four released training-seed-0
-actors, evaluation seed 20000, and 1500 actions per lap. Use `--methods bc dagger`
+in the unmodified solo task. Defaults discover all available completed actors at
+training seed 0 in BC, DAgger, SAC, SAC + symmetric sampling, RLPD order: four
+with the base release, five with the symmetric-sampling add-on. Evaluation seed
+20000 and 1500 actions per lap remain the defaults. Use `--methods bc dagger`
 for a smaller comparison, `--track mines` for held-out Old Mine, or
 `--root PATH` to select another completed study. Existing outputs are refused.
 Recordings and exports belong under ignored `runs/visualizations/`.
