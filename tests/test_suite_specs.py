@@ -42,3 +42,33 @@ def test_cuda_suite_changes_only_the_explicit_device():
 def test_ambiguous_or_invalid_replication_selection_rejected(methods, seeds):
     with pytest.raises(ValueError):
         specs(methods=methods, seeds=seeds)
+
+
+def test_long_first_changes_only_queue_order_for_the_same_six_jobs():
+    existing = specs(methods=("sac", "sac_sym", "rlpd"), seeds=(1, 2))
+    priority = specs(
+        methods=("sac", "sac_sym", "rlpd"), seeds=(1, 2), queue_order="long-first"
+    )
+    assert [name for name, _ in priority] == [
+        f"shared_{method}_s{seed}"
+        for method in ("rlpd", "sac_sym", "sac")
+        for seed in (1, 2)
+    ]
+    assert dict(priority) == dict(existing)
+    assert specs(queue_order="existing") == specs()
+    with pytest.raises(ValueError, match="Queue order"):
+        specs(queue_order="random")
+
+
+def test_long_first_ties_use_seed_and_preserve_remaining_method_order():
+    jobs = specs(
+        methods=("dagger", "bc", "sac"), seeds=(2, 1), queue_order="long-first"
+    )
+    assert [name for name, _ in jobs] == [
+        "shared_sac_s1",
+        "shared_sac_s2",
+        "shared_dagger_s1",
+        "shared_bc_s1",
+        "shared_dagger_s2",
+        "shared_bc_s2",
+    ]

@@ -21,7 +21,11 @@ from kartstudy.train import defaults, write_json
 
 
 def experiment_specs(
-    dataset=None, methods=("bc", "dagger", "sac", "rlpd"), seeds=range(5), device="mps"
+    dataset=None,
+    methods=("bc", "dagger", "sac", "rlpd"),
+    seeds=range(5),
+    device="mps",
+    queue_order="existing",
 ):
     if device not in ("mps", "cuda"):
         raise ValueError("Suite device must be mps or cuda; no automatic CPU fallback")
@@ -43,7 +47,9 @@ def experiment_specs(
         )
     ):
         raise ValueError("Select unique 32-bit nonnegative training seeds")
-    return [
+    if queue_order not in ("existing", "long-first"):
+        raise ValueError("Queue order must be existing or long-first")
+    jobs = [
         (
             f"shared_{algo}_s{seed}",
             defaults()
@@ -58,6 +64,10 @@ def experiment_specs(
         for seed in seeds
         for algo in methods
     ]
+    if queue_order == "long-first":
+        priority = {"rlpd": 0, "sac_sym": 1, "sac": 2}
+        jobs.sort(key=lambda job: (priority.get(job[1]["algo"], 3), job[1]["seed"]))
+    return jobs
 
 
 def main():
@@ -65,6 +75,9 @@ def main():
     parser.add_argument("--output", default="runs/study-polar-four")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--device", choices=("mps", "cuda"), default="mps")
+    parser.add_argument(
+        "--queue-order", choices=("existing", "long-first"), default="existing"
+    )
     parser.add_argument("--dataset", default=defaults()["dataset"])
     parser.add_argument(
         "--methods",
@@ -79,7 +92,9 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
         parser.error("Use 1–4 workers")
-    specs = experiment_specs(args.dataset, args.methods, args.seeds, args.device)
+    specs = experiment_specs(
+        args.dataset, args.methods, args.seeds, args.device, args.queue_order
+    )
     validate_dataset(
         args.dataset,
         specs[0][1]["tracks"],
@@ -169,6 +184,7 @@ def main():
             "dataset": args.dataset,
             "pid": os.getpid(),
             "workers": args.workers,
+            "queue_order": args.queue_order,
             "started_at": dt.datetime.now(dt.UTC).isoformat(),
             "jobs": jobs,
         }

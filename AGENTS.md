@@ -28,7 +28,8 @@ wrapper; installation and checks are in [docs/wsl.md](docs/wsl.md).
 Simulation and rollout/evaluation inference run on CPU. Keep one native simulator
 per worker process, rather than sharing it between threads. The simulator
 downloads its assets on first use. Limit concurrent learners based on measured
-throughput; more Metal processes do not necessarily train faster.
+throughput; more Metal processes do not necessarily train faster. Performance benchmarks and
+optional scheduling/evaluation controls are in [docs/training-performance.md](docs/training-performance.md).
 
 Rescue telemetry uses a read-only native bridge against PySuperTuxKart2 0.7.4.
 First use downloads checksum-verified source headers and compiles the small bridge

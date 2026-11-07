@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import math
+import multiprocessing as mp
+import pickle
+import tempfile
+import time
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from .environment import SCHEMA_VERSION
+from .environment import SCHEMA_VERSION, DrivingEnv
 
 
 def evaluate(
@@ -19,6 +26,10 @@ def evaluate(
     seeds,
     device: str = "cpu",
     trajectory_path: str | Path | None = None,
+    *,
+    workers: int = 1,
+    worker_timeout: float = 120.0,
+    env_factory=None,
 ) -> list[dict[str, Any]]:
     """Evaluate deterministic actions on fixed seeds, without updating the actor.
 
@@ -26,7 +37,26 @@ def evaluate(
     one numpy observation. Failed laps have ``lap_time=None``. The environment
     is reused sequentially and left at its last evaluated terminal state; callers
     must reset before resuming training.
+
+    ``workers=2..4`` runs contiguous seed partitions in spawned processes, each
+    with its own headless simulator and private frozen CPU actor. The parent
+    environment, actor and RNG states are untouched. Records and trajectory
+    episode indices retain input seed order. ``worker_timeout`` sets a shared
+    deadline including startup; child teardown is separately bounded. A
+    spawn-picklable ``env_factory`` can supply a custom environment; otherwise the headless DrivingEnv settings
+    are copied. Parallel evaluation requires a deterministic torch actor with
+    ``act`` and CPU inference. Initialize shared simulator assets before use.
     """
+    if type(workers) is not int or not 1 <= workers <= 4:
+        raise ValueError("Evaluation workers must be an integer from 1 to 4")
+    if workers == 1:
+        return _evaluate_serial(env, actor, seeds, device, trajectory_path)
+    return _evaluate_parallel(
+        env, actor, seeds, device, trajectory_path, workers, worker_timeout, env_factory
+    )
+
+
+def _evaluate_serial(env, actor, seeds, device="cpu", trajectory_path=None):
     records: list[dict[str, Any]] = []
     traces: dict[str, list] = defaultdict(list)
     was_training = actor.training if isinstance(actor, torch.nn.Module) else None
@@ -143,6 +173,196 @@ def evaluate(
             path, **{key: np.asarray(value) for key, value in traces.items()}
         )
     return records
+
+
+def _evaluation_worker(connection, factory, actor_payload, seeds, trajectory_path):
+    try:
+        torch.set_num_threads(1)
+        # Ordinary bytes avoid Torch's shared-memory/socket transport on macOS.
+        policy = pickle.loads(actor_payload).eval()
+        env = factory()
+        try:
+            records = _evaluate_serial(env, policy, seeds, "cpu", trajectory_path)
+        finally:
+            env.close()
+        connection.send(("ok", records))
+    except Exception as exc:  # noqa: BLE001 — transport worker failures to the parent
+        try:
+            connection.send(("error", f"{type(exc).__name__}: {exc}"))
+        except (BrokenPipeError, OSError):
+            pass
+    finally:
+        connection.close()
+
+
+def _stop_evaluation_worker(process):
+    process.join(timeout=0.5)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=0.5)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=0.5)
+    if not process.is_alive():
+        process.close()
+        return True
+    return False
+
+
+def _evaluate_parallel(
+    env, actor, seeds, device, trajectory_path, workers, worker_timeout, env_factory
+):
+    if device != "cpu":
+        raise ValueError("Parallel evaluation requires CPU inference")
+    if not isinstance(actor, torch.nn.Module) or not callable(
+        getattr(actor, "act", None)
+    ):
+        raise TypeError("Parallel evaluation requires a torch actor exposing act")
+    if (
+        isinstance(worker_timeout, bool)
+        or not math.isfinite(worker_timeout)
+        or worker_timeout <= 0
+    ):
+        raise ValueError("Evaluation worker timeout must be finite and positive")
+    if mp.parent_process() is not None:
+        raise RuntimeError("Nested parallel evaluation is unsupported")
+    if env_factory is None:
+        if type(env) is not DrivingEnv or getattr(
+            env.env.unwrapped, "render_mode", None
+        ):
+            raise ValueError(
+                "Parallel evaluation requires a headless DrivingEnv or env_factory"
+            )
+        env_factory = partial(DrivingEnv, track=env.track, max_steps=env.max_steps)
+    if not callable(env_factory):
+        raise TypeError("env_factory must be a spawn-picklable callable")
+    try:
+        pickle.dumps(env_factory)
+    except (AttributeError, TypeError, pickle.PicklingError) as exc:
+        raise ValueError(
+            "env_factory must be a top-level spawn-picklable callable"
+        ) from exc
+    seeds = [int(seed) for seed in seeds]
+    if not seeds:
+        if trajectory_path is not None:
+            path = Path(trajectory_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(path)
+        return []
+    try:
+        actor_payload = pickle.dumps(
+            copy.deepcopy(actor).cpu().eval(), protocol=pickle.HIGHEST_PROTOCOL
+        )
+    except (AttributeError, TypeError, pickle.PicklingError) as exc:
+        raise ValueError(
+            "Parallel actor must be a top-level pickle-compatible module"
+        ) from exc
+    count = min(workers, len(seeds))
+    partitions = [
+        (len(seeds) * i // count, len(seeds) * (i + 1) // count) for i in range(count)
+    ]
+    context = mp.get_context("spawn")
+    processes, connections = [], []
+    results = {}
+    scratch = tempfile.TemporaryDirectory(prefix="kartstudy-evaluation-", delete=False)
+    temporary = Path(scratch.name)
+    reaped = False
+    try:
+        try:
+            deadline = time.monotonic() + worker_timeout
+            for index, (start, end) in enumerate(partitions):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"Evaluation worker {index} timed out after {worker_timeout:g}s"
+                    )
+                parent, child = context.Pipe(duplex=False)
+                connections.append(parent)
+                part = (
+                    temporary / f"part-{index}.npz"
+                    if trajectory_path is not None
+                    else None
+                )
+                process = context.Process(
+                    target=_evaluation_worker,
+                    args=(child, env_factory, actor_payload, seeds[start:end], part),
+                    daemon=True,
+                )
+                try:
+                    process.start()
+                except Exception:
+                    if process.pid is None:
+                        process.close()
+                    else:
+                        processes.append(process)
+                    raise
+                finally:
+                    child.close()
+                processes.append(process)
+            pending = set(range(count))
+            while pending:
+                for index in tuple(pending):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"Evaluation worker {index} timed out after {worker_timeout:g}s"
+                        )
+                    connection, process = connections[index], processes[index]
+                    if connection.poll():
+                        try:
+                            kind, payload = connection.recv()
+                        except (EOFError, OSError) as exc:
+                            raise RuntimeError(
+                                f"Evaluation worker {index} exited without a result"
+                            ) from exc
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(
+                                f"Evaluation worker {index} timed out after {worker_timeout:g}s"
+                            )
+                        if kind != "ok":
+                            raise RuntimeError(
+                                f"Evaluation worker {index} failed: {payload}"
+                            )
+                        results[index] = payload
+                        pending.remove(index)
+                    elif not process.is_alive():
+                        raise RuntimeError(
+                            f"Evaluation worker {index} exited with code {process.exitcode}"
+                        )
+                if pending:
+                    time.sleep(0.01)
+        finally:
+            for connection in connections:
+                connection.close()
+            reaped = True
+            for process in processes:
+                try:
+                    if not _stop_evaluation_worker(process):
+                        reaped = False
+                except (OSError, ValueError, AssertionError):
+                    reaped = False
+            if not reaped:
+                raise RuntimeError(
+                    f"Could not reap evaluation workers; scratch retained at {temporary}"
+                )
+        if trajectory_path is not None:
+            traces = defaultdict(list)
+            for index, (start, _) in enumerate(partitions):
+                with np.load(
+                    temporary / f"part-{index}.npz", allow_pickle=False
+                ) as part:
+                    for key in part.files:
+                        values = part[key]
+                        traces[key].append(
+                            values + start if key == "episode" else values
+                        )
+            path = Path(trajectory_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                path, **{key: np.concatenate(values) for key, values in traces.items()}
+            )
+    finally:
+        if reaped:
+            scratch.cleanup()
+    return [record for index in range(count) for record in results[index]]
 
 
 def _mean_available(rows, metric):
