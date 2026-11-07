@@ -236,5 +236,102 @@ def _native_acceptance(track, proof):
     evidence_path.write_text(json.dumps(evidence, indent=2))
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Pinned native Mac renderer")
+@pytest.mark.parametrize("track", ["lighthouse", "stk_enterprise", "mines"])
+def test_actual_capture_pose_replacement_moves_visible_meshes(track, tmp_path):
+    proof = Path(os.environ.get("KARTSTUDY_NATIVE_PROOF_DIR", str(tmp_path))).resolve()
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), track, str(proof), "actual"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _actual_pose_acceptance(track, proof):
+    fixture_path = Path(__file__).with_name("fixtures") / "spectator_actual_poses.json"
+    fixture = json.loads(fixture_path.read_text())[track]
+    proof.mkdir(parents=True, exist_ok=True)
+    evidence = []
+    with NativeSpectator(track, fixture["ghosts"]) as spectator:
+        spectator.set_ghost_poses(fixture["initial_poses"])
+        spectator.render()
+        # Apply successively separated poses to the same native model hierarchy.
+        # This catches stale children and LOD tied to the hidden loading camera.
+        for case in fixture["cases"]:
+            poses = [
+                {
+                    k: value
+                    for k, value in pose.items()
+                    if k not in ("source_index", "source_sha256", "native_time")
+                }
+                for pose in case["poses"]
+            ]
+            selected = poses[1]
+            position = np.asarray(selected["position"])
+            forward = Rotation.from_quat(selected["rotation"]).apply([0, 0, 1])
+            forward[1] = 0
+            forward /= np.linalg.norm(forward)
+            camera = {
+                "position": (position - forward * 6 + [0, 2, 0]).tolist(),
+                "target": (position + [0, 0.5, 0]).tolist(),
+                "fov": math.radians(70),
+            }
+            spectator.set_ghost_poses(poses)
+            spectator.set_camera(camera)
+            first_seek_frame = spectator.render()
+            spectator.set_ghost_poses([])
+            empty = spectator.render()
+            seconds = case["race_time_requested"]
+            Image.fromarray(empty).save(proof / f"{track}-actual-{seconds}-empty.png")
+            pixel_counts = {}
+            for label, visible in (("one", [selected]), ("four", poses)):
+                spectator.set_ghost_poses(visible)
+                frame = spectator.render()
+                difference = np.any(frame != empty, axis=-1)
+                pixel_counts[label] = int(difference.sum())
+                assert pixel_counts[label] > 500, (
+                    "Actual measured ghost pose is invisible"
+                )
+                Image.fromarray(frame).save(
+                    proof / f"{track}-actual-{seconds}-{label}.png"
+                )
+                if label == "four":
+                    np.testing.assert_array_equal(frame, first_seek_frame)
+                diagnostics = spectator.diagnostics()
+                for pose in visible:
+                    transform = diagnostics["ghost_transforms"][pose["key"]]
+                    np.testing.assert_allclose(
+                        transform["model_position"], pose["position"], atol=1e-4
+                    )
+                    bounds = np.asarray(transform["world_bounds"])
+                    assert np.all(bounds[1] > bounds[0])
+                assert diagnostics["physical_kart_count_after"] == 1
+                assert diagnostics["race_time_before"] == diagnostics["race_time_after"]
+            # Seeking back must restore child transforms and the rendered pixels.
+            spectator.set_ghost_poses([selected])
+            one = spectator.render()
+            spectator.set_ghost_poses([])
+            spectator.render()
+            spectator.set_ghost_poses([selected])
+            np.testing.assert_array_equal(spectator.render(), one)
+            evidence.append(
+                {
+                    "race_time_requested": seconds,
+                    "pixel_counts": pixel_counts,
+                    "source_poses": case["poses"],
+                    "diagnostics": spectator.diagnostics(),
+                }
+            )
+    (proof / f"{track}-actual-acceptance.json").write_text(
+        json.dumps(evidence, indent=2)
+    )
+
+
 if __name__ == "__main__":
-    _native_acceptance(sys.argv[1], Path(sys.argv[2]))
+    if len(sys.argv) > 3 and sys.argv[3] == "actual":
+        _actual_pose_acceptance(sys.argv[1], Path(sys.argv[2]))
+    else:
+        _native_acceptance(sys.argv[1], Path(sys.argv[2]))

@@ -290,9 +290,17 @@ class NativeSpectator:
                     self._handle, index, _float_pointer(state)
                 )
             )
+            bounds = np.empty(9, dtype=np.float32)
+            self._check(
+                self._native.kartstudy_spectator_ghost_bounds(
+                    self._handle, index, _float_pointer(bounds)
+                )
+            )
             ghosts[key] = {
                 "position": state[:3].tolist(),
                 "forward": state[3:].tolist(),
+                "model_position": bounds[:3].tolist(),
+                "world_bounds": [bounds[3:6].tolist(), bounds[6:].tolist()],
             }
         return {
             **self._fingerprint,

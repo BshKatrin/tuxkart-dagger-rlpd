@@ -6,6 +6,7 @@
 #include "karts/kart_properties.hpp"
 #include "karts/kart_properties_manager.hpp"
 #include "graphics/irr_driver.hpp"
+#include "graphics/lod_node.hpp"
 #include "graphics/render_target.hpp"
 #include "graphics/shader_based_renderer.hpp"
 #include "graphics/frame_buffer.hpp"
@@ -19,6 +20,14 @@
 
 namespace {
 std::string error;
+// Irrlicht clears the parent dirty flag after an update. Explicitly refresh
+// descendants, including hidden LOD children, when replacing a frozen pose.
+void updateTransforms(irr::scene::ISceneNode* node) {
+    node->setNeedsUpdateAbsTrans(true);
+    node->updateAbsolutePosition();
+    const auto& children = node->getChildren();
+    for (unsigned i = 0; i < children.size(); ++i) updateTransforms(children[i]);
+}
 struct Ghost {
     std::unique_ptr<KartModel> model;
     irr::scene::ISceneNode* node = nullptr;
@@ -122,6 +131,9 @@ int kartstudy_spectator_add(void* handle, const char* kart, float hue) {
             std::make_shared<GE::GERenderInfo>(hue, false)));
         g->node = g->model->attachModel(true, false);
         if (!g->node) throw std::runtime_error("Native kart model attachment failed");
+        // Kart LOD reads Camera::s_active_camera, not our offscreen camera.
+        // Keep the single original model enabled; ordinary frustum/scene occlusion remains.
+        if (auto lod = dynamic_cast<LODNode*>(g->node)) lod->forceLevelOfDetail(0);
         g->model->update(0, 0, 0, 0, 0);
         g->node->setVisible(false);
         p.ghosts.push_back(std::move(g));
@@ -150,7 +162,7 @@ int kartstudy_spectator_pose(void* handle, int index, const float* pos,
         g.node->setRotation(angles.toIrrHPR());
         g.model->update(0, 0, steer, speed, 0);
         g.node->setVisible(visible != 0);
-        g.node->updateAbsolutePosition();
+        updateTransforms(g.node);
     });
 }
 int kartstudy_spectator_camera_state(void* handle, float* out) {
@@ -170,6 +182,17 @@ int kartstudy_spectator_ghost_state(void* handle, int index, float* out) {
         node->getAbsoluteTransformation().rotateVect(forward);
         out[0] = pos.X; out[1] = pos.Y; out[2] = pos.Z;
         out[3] = forward.X; out[4] = forward.Y; out[5] = forward.Z;
+    });
+}
+int kartstudy_spectator_ghost_bounds(void* handle, int index, float* out) {
+    return checked([&] {
+        auto node = static_cast<Presentation*>(handle)->ghosts.at(index)->node;
+        auto box = node->getTransformedBoundingBox();
+        auto mesh = node->getChildren().empty() ? node : node->getChildren()[0];
+        auto pos = mesh->getAbsolutePosition();
+        out[0] = pos.X; out[1] = pos.Y; out[2] = pos.Z;
+        out[3] = box.MinEdge.X; out[4] = box.MinEdge.Y; out[5] = box.MinEdge.Z;
+        out[6] = box.MaxEdge.X; out[7] = box.MaxEdge.Y; out[8] = box.MaxEdge.Z;
     });
 }
 void kartstudy_spectator_test_fail_next_render(void* handle) {
