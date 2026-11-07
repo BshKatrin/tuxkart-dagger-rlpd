@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from .environment import ACTION_KEYS, DrivingEnv
+from .expert import Expert
 from .native_telemetry import SOURCE_SHA256
 from .playback import METHODS, discover_runs, load_actor
 from .snapshots import actor_hash, file_hash, source_identity
@@ -16,7 +17,14 @@ from .spectator_contract import GhostConfig, GhostPose
 
 FORMAT_VERSION = 2
 TIME_POLICY = "time=max(native_time, 0); countdown never advances race time; action_time counts completed 0.1-second control steps"
-COLORS = {"bc": 0.08, "dagger": 0.56, "sac": 0.0, "sac_sym": 0.78, "rlpd": 0.33}
+COLORS = {
+    "bc": 0.08,
+    "dagger": 0.56,
+    "sac": 0.0,
+    "sac_sym": 0.78,
+    "rlpd": 0.33,
+    "expert": 0.15,
+}
 
 
 def _json_value(value):
@@ -287,7 +295,7 @@ def _selections(root, track, methods, train_seed, snapshots):
             methods = tuple(
                 method
                 for method in COLORS
-                if (track, method, int(train_seed)) in catalog
+                if method == "expert" or (track, method, int(train_seed)) in catalog
             )
         if not methods:
             raise ValueError(
@@ -296,12 +304,18 @@ def _selections(root, track, methods, train_seed, snapshots):
         missing = [
             method
             for method in methods
-            if (track, method, int(train_seed)) not in catalog
+            if method != "expert" and (track, method, int(train_seed)) not in catalog
         ]
         if missing:
             raise ValueError(f"No completed spectator actor for: {', '.join(missing)}")
         return [
-            (method, catalog[(track, method, int(train_seed))], False)
+            (
+                method,
+                None
+                if method == "expert"
+                else catalog[(track, method, int(train_seed))],
+                False,
+            )
             for method in methods
         ]
     if isinstance(snapshots, (str, Path)):
@@ -365,7 +379,12 @@ def capture_comparison(
     ):
         raise ValueError("Require positive max_steps and known methods")
     selections = _selections(root, track, methods, train_seed, snapshots)
-    if len({str(path.resolve()) for _, path, _ in selections}) != len(selections):
+    if len(
+        {
+            str(path.resolve()) if path is not None else "expert"
+            for _, path, _ in selections
+        }
+    ) != len(selections):
         raise ValueError("Duplicate actors selected")
     import pystk2
 
@@ -398,22 +417,25 @@ def capture_comparison(
     try:
         env = DrivingEnv(track=track, max_steps=max_steps)
         for method, path, milestone in selections:
-            actor, config, steps = load_actor(path)
-            state_path = path / (
-                "actor.pt" if (path / "actor.pt").exists() else "checkpoint.pt"
-            )
-            # Actor-only state contains portable counters. Legacy rolling states are trusted local data.
-            state = torch.load(
-                state_path,
-                map_location="cpu",
-                weights_only=state_path.name == "actor.pt",
-                mmap=True,
-            )
-            status_file = path / "status.json"
-            counters = (
-                json.loads(status_file.read_text()) if status_file.exists() else {}
-            )
-            updates = state.get("updates", counters.get("updates"))
+            actor, state_path, updates = None, None, None
+            config, state, steps = {"algo": "expert", "seed": None}, {}, None
+            if method != "expert":
+                actor, config, steps = load_actor(path)
+                state_path = path / (
+                    "actor.pt" if (path / "actor.pt").exists() else "checkpoint.pt"
+                )
+                # Actor-only state contains portable counters. Legacy rolling states are trusted local data.
+                state = torch.load(
+                    state_path,
+                    map_location="cpu",
+                    weights_only=state_path.name == "actor.pt",
+                    mmap=True,
+                )
+                status_file = path / "status.json"
+                counters = (
+                    json.loads(status_file.read_text()) if status_file.exists() else {}
+                )
+                updates = state.get("updates", counters.get("updates"))
             key = (
                 f"{method}-s{train_seed}-actions-{steps}-updates-{updates}"
                 if milestone
@@ -434,28 +456,45 @@ def capture_comparison(
                 "color": COLORS[method],
             }
             manifest["ghosts"].append(ghost)
-            before_hash = actor_hash(actor.state_dict())
+            before_hash = actor_hash(actor.state_dict()) if actor is not None else None
             lap = {
                 "file": f"{key}.npz",
                 "method": method,
-                "training_seed": int(config["seed"]),
+                "training_seed": config["seed"],
                 "evaluation_seed": int(eval_seed),
                 "checkpoint_step": steps,
                 "checkpoint_updates": updates,
                 "dagger_round": state.get("dagger_round"),
                 "actor_sha256": before_hash,
-                "actor_file_sha256": file_hash(state_path),
-                "actor_source": str(path.resolve()),
+                "actor_file_sha256": file_hash(state_path) if state_path else None,
+                "actor_source": str(path.resolve()) if path else None,
                 "configuration": config,
                 "status": "stopped",
                 "lap_time": None,
                 "success": False,
                 "steps": 0,
             }
-            provenance = path / ("manifest.json" if milestone else "provenance.json")
-            lap["training_provenance"] = (
-                json.loads(provenance.read_text()) if provenance.exists() else None
+            provenance = (
+                path / ("manifest.json" if milestone else "provenance.json")
+                if path
+                else None
             )
+            lap["training_provenance"] = (
+                json.loads(provenance.read_text())
+                if provenance and provenance.exists()
+                else None
+            )
+            if method == "expert":
+                lap["expert_provenance"] = {
+                    "name": Expert.name,
+                    "source_commit": Expert.source_commit,
+                    "manifest": json.loads(
+                        Path(__file__)
+                        .with_name("_team4")
+                        .joinpath("manifest.json")
+                        .read_text()
+                    ),
+                }
             rows, info = [], {}
             try:
                 obs, reset_info = env.reset(seed=int(eval_seed), track=track)
@@ -485,11 +524,17 @@ def capture_comparison(
                 with torch.inference_mode():
                     for index in range(max_steps):
                         action = (
-                            actor.act(
-                                torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
+                            env.expert_action()
+                            if actor is None
+                            else (
+                                actor.act(
+                                    torch.as_tensor(obs, dtype=torch.float32).unsqueeze(
+                                        0
+                                    )
+                                )
+                                .squeeze(0)
+                                .numpy()
                             )
-                            .squeeze(0)
-                            .numpy()
                         )
                         obs, _, term, trunc, info = env.step(action)
                         pose = env.replay_pose()
@@ -538,7 +583,7 @@ def capture_comparison(
                 except Exception as pose_error:  # noqa: BLE001 — preserve the original simulator failure
                     lap["terminal_pose_error"] = str(pose_error)
             finally:
-                if actor_hash(actor.state_dict()) != before_hash:
+                if actor is not None and actor_hash(actor.state_dict()) != before_hash:
                     raise RuntimeError("Frozen capture actor changed")
                 lap["terminal_info"] = info
                 manifest["laps"][key] = lap

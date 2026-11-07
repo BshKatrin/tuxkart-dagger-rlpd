@@ -49,7 +49,7 @@ authoritative and are never replaced by video metadata.
 ## Native ghost comparisons
 
 The spectator shows frozen BC, DAgger, SAC, SAC + symmetric sampling and RLPD solo laps together in the
-original textured SuperTuxKart scenery. Each ghost is a copied native kart model
+original textured SuperTuxKart scenery, alongside the Team 4 expert reference. Each ghost is a copied native kart model
 without a physics body. Replay rendering changes camera and model transforms;
 it runs neither the actors nor simulation steps. The engine's one hidden kart
 loads the scenery. This is an **independent solo-lap replay**, with race-time
@@ -84,9 +84,13 @@ uv run python -m kartstudy.spectator export runs/visualizations/lighthouse-compa
 Capture runs each selected actor sequentially with deterministic CPU inference
 in the unmodified solo task. Defaults discover all available completed actors at
 training seed 0 in BC, DAgger, SAC, SAC + symmetric sampling, RLPD order: four
-with the base release, five with the symmetric-sampling add-on. Evaluation seed
+learned policies with the base release, five with the symmetric-sampling add-on,
+plus the expert by default. Explicit `--methods` selects only the requested policies;
+snapshot captures retain only the selected learned checkpoints. Expert laps record
+source provenance and have no training seed or checkpoint. Existing recordings
+remain unchanged; capture a fresh directory to include the expert. Evaluation seed
 20000 and 1500 actions per lap remain the defaults. Use `--methods bc dagger`
-for a smaller comparison, `--track mines` for held-out Old Mine, or
+for a smaller comparison, `--methods expert` for the expert alone, `--track mines` for held-out Old Mine, or
 `--root PATH` to select another completed study. Existing outputs are refused.
 Recordings and exports belong under ignored `runs/visualizations/`.
 

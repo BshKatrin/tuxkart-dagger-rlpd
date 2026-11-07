@@ -90,7 +90,10 @@ def test_capture_initial_terminal_failed_laps_and_freezing(
     monkeypatch.setattr(replay, "DrivingEnv", FakeEnv)
     before = {p: file_hash(p) for p in actors.rglob("actor.pt")}
     result = replay.capture_comparison(
-        tmp_path / "comparison", root=actors, max_steps=3
+        tmp_path / "comparison",
+        root=actors,
+        methods=("bc", "dagger", "sac", "rlpd"),
+        max_steps=3,
     )
     assert result.track == "lighthouse" and result.seed == 20000
     assert result.manifest["laps"]["bc"]["checkpoint_updates"] == 12
@@ -133,7 +136,12 @@ def test_capture_discovers_completed_fifth_actor_and_preserves_colors(
         json.dumps({"status": "completed", "updates": 12})
     )
     before = {path: file_hash(path) for path in actors.rglob("actor.pt")}
-    result = replay.capture_comparison(tmp_path / "five", root=actors, max_steps=3)
+    result = replay.capture_comparison(
+        tmp_path / "five",
+        root=actors,
+        methods=("bc", "dagger", "sac", "sac_sym", "rlpd"),
+        max_steps=3,
+    )
     assert [g["key"] for g in result.ghosts] == [
         "bc",
         "dagger",
@@ -541,3 +549,35 @@ def test_v1_load_uses_native_clock_read_only(tmp_path, with_controls, zero_durat
     manifest_file.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="orientation"):
         replay.ReplayComparison(tmp_path)
+
+
+def test_default_capture_adds_expert_without_checkpoint(tmp_path, actors, monkeypatch):
+    class ExpertEnv(FakeEnv):
+        def expert_action(self):
+            return np.array([0.4, 0.8, -1, -1, -1])
+
+        def step(self, action):
+            if self.resets == 5:
+                np.testing.assert_array_equal(action, self.expert_action())
+            return super().step(action)
+
+    monkeypatch.setattr(replay, "DrivingEnv", ExpertEnv)
+    result = replay.capture_comparison(
+        tmp_path / "with-expert", root=actors, max_steps=3
+    )
+    assert [g["key"] for g in result.ghosts] == [
+        "bc",
+        "dagger",
+        "sac",
+        "rlpd",
+        "expert",
+    ]
+    lap = result.manifest["laps"]["expert"]
+    assert lap["steps"] == 3 and lap["status"] == "timeout"
+    assert lap["training_seed"] is None and lap["actor_sha256"] is None
+    assert lap["actor_source"] is None and lap["checkpoint_step"] is None
+    assert lap["expert_provenance"]["name"] == replay.Expert.name
+    selected = replay._selections(
+        tmp_path / "no-actors", "lighthouse", ("expert",), 0, None
+    )
+    assert selected == [("expert", None, False)]

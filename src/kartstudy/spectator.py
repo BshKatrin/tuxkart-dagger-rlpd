@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .spectator_camera import CAMERA_MODES, CameraSettings
 
-METHODS = ("bc", "dagger", "sac", "sac_sym", "rlpd")
+METHODS = ("bc", "dagger", "sac", "sac_sym", "rlpd", "expert")
 
 
 def parser():
@@ -23,7 +23,7 @@ def parser():
         "--methods",
         nargs="+",
         choices=METHODS,
-        help="Methods to record (default: all available completed actors at this seed)",
+        help="Methods to record (default: all available completed actors at this seed plus expert)",
     )
     capture.add_argument("--eval-seed", type=int, default=20000)
     capture.add_argument("--train-seed", type=int, default=0)
