@@ -134,6 +134,22 @@ def symmetric_sample(
     )
 
 
+def foreach_soft_update(source: nn.Module, target: nn.Module, tau: float) -> None:
+    """Grouped target updates with the same multiply-then-add equation.
+
+    SAC selects this on CUDA, qualified with the committed dependency lock.
+    CPU and Metal retain ``rl_mind.soft_update``; unsupported kernels raise.
+    """
+    sources, targets = list(source.parameters()), list(target.parameters())
+    if len(sources) != len(targets):
+        raise ValueError("Source and target parameter counts must match")
+    if not targets:
+        return
+    with torch.no_grad():
+        torch._foreach_mul_(targets, 1.0 - tau)
+        torch._foreach_add_(targets, sources, alpha=tau)
+
+
 class SAC(nn.Module):
     def __init__(
         self,
@@ -177,7 +193,19 @@ class SAC(nn.Module):
     def alpha(self) -> Tensor:
         return self.log_alpha.exp()
 
-    def update(self, batch: Transitions, update_actor: bool = True) -> dict[str, float]:
+    def update(
+        self,
+        batch: Transitions,
+        update_actor: bool = True,
+        *,
+        collect_metrics: bool = True,
+    ) -> dict[str, float]:
+        """Update weights normally; optionally defer CPU scalar reporting.
+
+        ``collect_metrics=False`` returns an empty dictionary without reporting
+        reductions or device-to-host synchronization. It retains update cadence,
+        target updates and RNG behavior. The default preserves the existing API.
+        """
         batch = batch._map(lambda tensor: tensor.to(self.device))
         with torch.no_grad():
             next_action = self.actor(batch.next_obs)
@@ -202,7 +230,11 @@ class SAC(nn.Module):
         critic_loss.backward()
         self.critic_optimizer.step()
         self.critic_optimizer.zero_grad(set_to_none=True)
-        metrics = {"critic_loss": critic_loss.detach(), "q": qs.detach().mean()}
+        metrics = (
+            {"critic_loss": critic_loss.detach(), "q": qs.detach().mean()}
+            if collect_metrics
+            else {}
+        )
 
         if update_actor:
             # Freeze Q weights, retaining gradients through Q with respect to action.
@@ -223,14 +255,21 @@ class SAC(nn.Module):
                 self.alpha_optimizer.zero_grad(set_to_none=True)
                 alpha_loss.backward()
                 self.alpha_optimizer.step()
-                metrics["alpha_loss"] = alpha_loss.detach()
-            metrics.update(
-                actor_loss=actor_loss.detach(),
-                entropy=-sampled.log_prob.detach().mean(),
-            )
+                if collect_metrics:
+                    metrics["alpha_loss"] = alpha_loss.detach()
+            if collect_metrics:
+                metrics.update(
+                    actor_loss=actor_loss.detach(),
+                    entropy=-sampled.log_prob.detach().mean(),
+                )
 
-        soft_update(self.critics, self.target_critics, self.tau)
+        target_update = (
+            foreach_soft_update if self.device.type == "cuda" else soft_update
+        )
+        target_update(self.critics, self.target_critics, self.tau)
         self.updates += 1
+        if not collect_metrics:
+            return {}
         metrics["alpha"] = self.alpha.detach()
         # One GPU synchronization for all scalars rather than one per metric.
         return dict(zip(metrics, torch.stack(list(metrics.values())).cpu().tolist()))

@@ -1,10 +1,13 @@
 import copy
 import math
+import random
 
+import numpy as np
 import pytest
 import torch
 from rl_mind.core import Action
 from rl_mind.data import ReplayBuffer, Transitions
+from rl_mind.nn import soft_update as original_soft_update
 
 from kartstudy.algorithms import (
     SAC,
@@ -13,8 +16,196 @@ from kartstudy.algorithms import (
     bellman_target,
     ensemble_forward,
     fit_imitation,
+    foreach_soft_update,
     symmetric_sample,
 )
+
+EFFICIENCY_DEVICES = (
+    ["cpu"]
+    + (["mps"] if torch.backends.mps.is_available() else [])
+    + (["cuda"] if torch.cuda.is_available() else [])
+)
+
+
+def rng_snapshot(device):
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "cpu": torch.get_rng_state().clone(),
+    }
+    if device == "mps":
+        state["device"] = torch.mps.get_rng_state().clone()
+    elif device == "cuda":
+        state["device"] = [state.clone() for state in torch.cuda.get_rng_state_all()]
+    return state
+
+
+def restore_rng(state, device):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["cpu"])
+    if device == "mps":
+        torch.mps.set_rng_state(state["device"])
+    elif device == "cuda":
+        torch.cuda.set_rng_state_all(state["device"])
+
+
+def assert_exact_state(left, right):
+    if isinstance(left, torch.Tensor):
+        assert left.dtype == right.dtype and left.device == right.device
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    elif isinstance(left, np.ndarray):
+        np.testing.assert_array_equal(left, right)
+    elif isinstance(left, dict):
+        assert left.keys() == right.keys()
+        for key in left:
+            assert_exact_state(left[key], right[key])
+    elif isinstance(left, (tuple, list)):
+        assert len(left) == len(right)
+        for a, b in zip(left, right, strict=True):
+            assert_exact_state(a, b)
+    else:
+        assert left == right
+
+
+@pytest.mark.parametrize("device", EFFICIENCY_DEVICES)
+@pytest.mark.parametrize("target_foreach", [False, True])
+@pytest.mark.parametrize(
+    "ensemble,layer_norm,utd,learn_temperature,critic_only",
+    [
+        (2, False, 1, True, False),
+        (10, True, 4, True, False),
+        (2, False, 1, False, False),
+        (2, False, 1, True, True),
+    ],
+)
+def test_deferred_metrics_preserve_exact_training_state_and_rng(
+    monkeypatch,
+    device,
+    target_foreach,
+    ensemble,
+    layer_norm,
+    utd,
+    learn_temperature,
+    critic_only,
+):
+    from kartstudy import algorithms
+
+    random.seed(31)
+    np.random.seed(31)
+    torch.manual_seed(31)
+    baseline = SAC(
+        7,
+        action_dim=3,
+        hidden=16,
+        device=device,
+        ensemble=ensemble,
+        layer_norm=layer_norm,
+        learn_temperature=learn_temperature,
+    )
+    candidate = SAC(
+        7,
+        action_dim=3,
+        hidden=16,
+        device=device,
+        ensemble=ensemble,
+        layer_norm=layer_norm,
+        learn_temperature=learn_temperature,
+    )
+    candidate.load_checkpoint(copy.deepcopy(baseline.checkpoint()))
+    batches = []
+    for index in range(8):
+        batch = transitions()
+        # CPU/CUDA accept mixed reward dtypes; Metal requires float32 batches.
+        batches.append(
+            Transitions(
+                batch.obs,
+                batch.action,
+                batch.reward.double()
+                if index % 2 and device != "mps"
+                else batch.reward,
+                batch.next_obs,
+                batch.terminated,
+            )
+        )
+    before = rng_snapshot(device)
+    expected_metrics, checkpoints, rng_states, gradients = [], [], [], []
+    cadence = [not critic_only and (index + 1) % utd == 0 for index in range(8)]
+    with monkeypatch.context() as legacy:
+        # The CUDA reference must use the previous per-parameter target path.
+        if device == "cuda":
+            legacy.setattr(algorithms, "foreach_soft_update", original_soft_update)
+        for batch, update_actor in zip(batches, cadence, strict=True):
+            expected_metrics.append(baseline.update(batch, update_actor=update_actor))
+            checkpoints.append(copy.deepcopy(baseline.checkpoint()))
+            rng_states.append(rng_snapshot(device))
+            gradients.append(
+                [
+                    None if p.grad is None else p.grad.detach().clone()
+                    for p in baseline.parameters()
+                ]
+            )
+    restore_rng(before, device)
+    if target_foreach:
+        monkeypatch.setattr(algorithms, "soft_update", foreach_soft_update)
+    for index, (batch, update_actor) in enumerate(zip(batches, cadence, strict=True)):
+        collect = (index + 1) % 4 == 0
+        metrics = candidate.update(
+            batch, update_actor=update_actor, collect_metrics=collect
+        )
+        assert metrics == (expected_metrics[index] if collect else {})
+        assert_exact_state(candidate.checkpoint(), checkpoints[index])
+        assert_exact_state(rng_snapshot(device), rng_states[index])
+        assert_exact_state([p.grad for p in candidate.parameters()], gradients[index])
+    assert baseline.updates == candidate.updates == 8
+
+
+def test_deferred_metrics_avoid_scalar_cpu_conversion(monkeypatch):
+    learner = SAC(7, action_dim=3, hidden=16, device="cpu")
+    batch = transitions()
+    calls = []
+    original = torch.Tensor.cpu
+
+    def cpu(tensor, *args, **kwargs):
+        calls.append(tensor.shape)
+        return original(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "cpu", cpu)
+    assert learner.update(batch, collect_metrics=False) == {}
+    assert not calls
+    metrics = learner.update(batch)
+    assert set(metrics) == {
+        "critic_loss",
+        "q",
+        "actor_loss",
+        "entropy",
+        "alpha_loss",
+        "alpha",
+    }
+    assert calls == [torch.Size([6])]
+
+
+@pytest.mark.parametrize("device", EFFICIENCY_DEVICES)
+@pytest.mark.parametrize("tau", [0.0, 0.005, 0.2, 1.0])
+def test_foreach_target_updates_preserve_equations_source_and_rng(device, tau):
+    from rl_mind.nn import soft_update
+
+    torch.manual_seed(31)
+    source = torch.nn.ModuleList([Critic(7, 3, 16, True) for _ in range(10)]).to(device)
+    looped = copy.deepcopy(source).requires_grad_(False)
+    grouped = copy.deepcopy(looped)
+    with torch.no_grad():
+        for parameter in source.parameters():
+            parameter.add_(torch.randn_like(parameter) * 0.1)
+    source_before = copy.deepcopy(source.state_dict())
+    before = rng_snapshot(device)
+    for _ in range(4):
+        soft_update(source, looped, tau)
+        foreach_soft_update(source, grouped, tau)
+        assert_exact_state(grouped.state_dict(), looped.state_dict())
+        assert_exact_state(source.state_dict(), source_before)
+        assert_exact_state(rng_snapshot(device), before)
+    assert all(parameter.grad is None for parameter in grouped.parameters())
 
 
 @pytest.mark.parametrize(

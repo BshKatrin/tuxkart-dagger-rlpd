@@ -394,7 +394,9 @@ def run(config, out):
                     for update_index in range(chunk * config["utd"]):
                         batch = symmetric_sample(online, offline, config["batch_size"])
                         metrics = learner.update(
-                            batch, update_actor=(update_index + 1) % config["utd"] == 0
+                            batch,
+                            update_actor=(update_index + 1) % config["utd"] == 0,
+                            collect_metrics=update_index + 1 == chunk * config["utd"],
                         )
                         updates += 1
             if not all(np.isfinite(value) for value in metrics.values()):

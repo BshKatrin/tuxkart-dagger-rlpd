@@ -62,7 +62,10 @@ def test_snapshots_preserve_rng_actor_and_unique_boundaries(tmp_path):
     ],
 )
 @pytest.mark.parametrize(
-    "device", ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+    "device",
+    ["cpu"]
+    + (["cuda"] if torch.cuda.is_available() else [])
+    + (["mps"] if torch.backends.mps.is_available() else []),
 )
 def test_tiny_training_logging_preserves_weights_counters_and_rng(
     tmp_path, monkeypatch, algo, stopped, device
@@ -164,11 +167,19 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
         return original_export(*args, **kwargs)
 
     monkeypatch.setattr(train, "export_actor_snapshot", export)
+    original_update = train.SAC.update
+
+    def immediate_metrics(self, *args, **kwargs):
+        kwargs["collect_metrics"] = True
+        return original_update(self, *args, **kwargs)
+
     with monkeypatch.context() as context:
         context.setattr(train, "export_actor_snapshot", lambda *a, **kw: None)
+        context.setattr(train.SAC, "update", immediate_metrics)
         train.run(config, baseline)
     baseline_rng = rng_state()
     baseline_cuda = torch.cuda.get_rng_state_all() if device == "cuda" else None
+    baseline_mps = torch.mps.get_rng_state().clone() if device == "mps" else None
     train.run(config, logged)
     assert_rng_equal(baseline_rng, rng_state())
     if baseline_cuda is not None:
@@ -176,10 +187,33 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
             baseline_cuda, torch.cuda.get_rng_state_all(), strict=True
         ):
             torch.testing.assert_close(expected, actual, rtol=0, atol=0)
+    if baseline_mps is not None:
+        torch.testing.assert_close(
+            baseline_mps, torch.mps.get_rng_state(), rtol=0, atol=0
+        )
     a = torch.load(baseline / "checkpoint.pt", weights_only=False)
     b = torch.load(logged / "checkpoint.pt", weights_only=False)
     assert a["step"] == b["step"] and a["updates"] == b["updates"]
     assert actor_hash(a["actor"]) == actor_hash(b["actor"])
+
+    def assert_nested_equal(expected, actual):
+        if isinstance(expected, torch.Tensor):
+            torch.testing.assert_close(expected, actual, rtol=0, atol=0)
+        elif isinstance(expected, dict):
+            assert expected.keys() == actual.keys()
+            for key in expected:
+                assert_nested_equal(expected[key], actual[key])
+        elif isinstance(expected, (list, tuple)):
+            assert len(expected) == len(actual)
+            for left, right in zip(expected, actual, strict=True):
+                assert_nested_equal(left, right)
+        else:
+            assert expected == actual
+
+    assert_nested_equal(a["learner"], b["learner"])
+    assert_nested_equal(a["optimizer"], b["optimizer"])
+    if device == "mps":
+        assert_nested_equal(a["rng_mps"], b["rng_mps"])
     assert_rng_equal(
         (a["rng_python"], a["rng_numpy"], a["rng_torch"]),
         (b["rng_python"], b["rng_numpy"], b["rng_torch"]),
