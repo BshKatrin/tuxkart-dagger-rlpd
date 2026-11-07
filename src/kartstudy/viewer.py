@@ -13,10 +13,7 @@ def choices(playback, field):
         return [
             (m, METHODS[m])
             for m in METHODS
-            if m == "expert"
-            or any(
-                e == playback.track and method == m for e, method, _ in playback.catalog
-            )
+            if m == "expert" or any(method == m for _, method, _ in playback.catalog)
         ]
     if field == "track":
         titles = {"lighthouse": "Lighthouse", "snowtuxpeak": "Snow Tux Peak"}
@@ -28,13 +25,7 @@ def choices(playback, field):
         return [(0, "Expert reference")]
     return [
         (s, f"Training seed {s}")
-        for s in sorted(
-            {
-                s
-                for e, m, s in playback.catalog
-                if e == playback.track and m == playback.method
-            }
-        )
+        for s in sorted({s for _, m, s in playback.catalog if m == playback.method})
     ]
 
 
@@ -50,11 +41,7 @@ def select(playback, field, value):
     }
     config[field] = value
     if config["method"] != "expert":
-        available = sorted(
-            s
-            for e, m, s in playback.catalog
-            if e == config["track"] and m == config["method"]
-        )
+        available = sorted(s for _, m, s in playback.catalog if m == config["method"])
         if not available:
             config["method"] = "expert"
             config["train_seed"] = 0

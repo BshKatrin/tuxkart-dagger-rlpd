@@ -30,3 +30,14 @@ The packager validates that all four retained runs completed and use seed 0.
 It saves archive hashes and a run inventory in `artifact-manifest.json` and never
 overwrites ZIPs. Use a new release tag for each snapshot. Automatic training
 resume is not implemented. See the [study protocol](study.md).
+
+## SAC symmetric sampling add-on
+
+After restoring `polar-four-seed0-v1`, extract `sac-sym-policy.zip` from the newer
+`sac-sym-seed0-v1` release at the repository root. It includes the completed
+`sac_sym` seed-0 actor, official evaluations/trajectories, original source snapshot,
+configuration comparison, and an updated selection manifest registering all five
+methods in the default viewer. It reuses the exact demonstration dataset from
+the base release (20 training seeds per track). `sac-sym-training-checkpoint.zip`
+is optional and preserves the full original checkpoint. Verify the add-on's
+SHA256SUMS. Other policies and extra runs are unchanged.

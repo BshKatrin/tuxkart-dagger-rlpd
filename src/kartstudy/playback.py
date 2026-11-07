@@ -19,6 +19,7 @@ METHODS = {
     "bc": "Behavior cloning",
     "dagger": "DAgger",
     "sac": "Online SAC",
+    "sac_sym": "SAC + symmetric sampling",
     "rlpd": "RLPD",
 }
 
@@ -27,13 +28,18 @@ def discover_runs(root):
     """Use actual completed-run metadata rather than assumptions about filenames."""
     selection = Path(root) / "selected-policies.json"
     selected = json.loads(selection.read_text()) if selection.exists() else None
+    paths = set(Path(root).glob("*/config.json"))
+    if selected is not None:
+        paths.update(Path(root) / value / "config.json" for value in selected.values())
     catalog = {}
-    for path in sorted(Path(root).glob("*/config.json")):
+    for path in sorted({path.resolve() for path in paths if path.exists()}):
         config = json.loads(path.read_text())
         if config.get("algo") not in METHODS or config["algo"] == "expert":
             continue
-        if selected is not None and selected.get(config["algo"]) != path.parent.name:
-            continue
+        if selected is not None:
+            chosen = selected.get(config["algo"])
+            if chosen is None or (Path(root) / chosen).resolve() != path.parent:
+                continue
         status_path = path.parent / "status.json"
         if not status_path.exists() or not any(
             (path.parent / name).exists() for name in ("actor.pt", "checkpoint.pt")
@@ -98,10 +104,16 @@ class Playback:
         if method == "expert":
             actor, checkpoint_step = None, None
         else:
-            key = (track, method, int(train_seed))
-            if key not in self.catalog:
+            path = next(
+                (
+                    path
+                    for (_, m, seed), path in self.catalog.items()
+                    if m == method and seed == int(train_seed)
+                ),
+                None,
+            )
+            if path is None:
                 raise ValueError("No completed checkpoint for this combination")
-            path = self.catalog[key]
             if path not in self.actors:
                 self.actors[path] = load_actor(path)
             actor, _config, checkpoint_step = self.actors[path]
@@ -116,10 +128,7 @@ class Playback:
         # Track discovery requires the simulator initialized in this process.
         import pystk2
 
-        self.tracks = sorted(
-            set(ALL_TRACKS)
-            & set(pystk2.list_tracks(pystk2.RaceConfig.RaceMode.NORMAL_RACE))
-        )
+        self.tracks = sorted(pystk2.list_tracks(pystk2.RaceConfig.RaceMode.NORMAL_RACE))
         self.done, self.steps, self.total_reward = False, 0, 0.0
         self.info = {
             "elapsed_seconds": 0.0,

@@ -114,3 +114,15 @@ Configurations, datasets and checkpoints use schema 3. A suite validates the
 complete dataset before queuing jobs, saves exact source and protocol snapshots,
 and records per-track online counters in statuses and checkpoints. Use fresh
 artifact paths. Training resume is not implemented.
+
+## Additional 20-demo symmetric-sampling ablation
+
+A separate `sac_sym` run uses training seed 0 and the same 20 demonstration
+seeds (1000–1019) per training track. Validation remains 1020–1021, excluded from
+replay. It uses the same four tracks and 400,000-action budget, two critics,
+no critic layer normalization, one critic update and one actor update per action
+after warmup, and 50/50 online/demonstration sampling. Other SAC settings and
+fixed evaluation seeds are unchanged. This matches the demonstration budget of the retained SAC/RLPD methods,
+so SAC versus SAC symmetric sampling isolates the sampling change.
+Its artifacts and source snapshot live separately from the stopped main suite;
+its result is not included in the four-policy release.

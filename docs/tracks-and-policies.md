@@ -1,6 +1,7 @@
 # Tracks and policies
 
-Retain **one policy per learned method, training seed 0**. This choice is fixed
+Retain **one policy per learned method, training seed 0** (five learned methods
+with the SAC symmetric sampling add-on). This choice is fixed
 across collaborators; it is not the seed with the best evaluation score.
 The viewer reads `runs/study-polar-four/selected-policies.json`.
 
@@ -10,6 +11,7 @@ The viewer reads `runs/study-polar-four/selected-policies.json`.
 | `bc` | Behavior cloning | Seed 0; 8,000 supervised updates |
 | `dagger` | DAgger | Seed 0; 400,000 online actions |
 | `sac` | Online SAC | Seed 0; 400,000 online actions |
+| `sac_sym` | SAC + symmetric sampling | Seed 0; 400,000 online actions |
 | `rlpd` | RLPD | Seed 0; 400,000 online actions |
 
 Demonstration seeds 1000–1019 provide training laps; 1020–1021 provide validation
@@ -30,8 +32,8 @@ Off-track is the percentage of race time flagged off-road. No initial harmful
 rows means N/A. Newly dropped bubblegum contacts are not fully measured.
 See [measurement definitions and limits](expert-evaluation.md).
 
-The table lists all 21 installed race tracks. The viewer offers the 13 study
-tracks (training or held out); the other eight are unused. Use the exact simulator
+The table lists all 21 installed race tracks, all available in the viewer.
+Thirteen are study tracks (training or held out); eight are outside the study. Use the exact simulator
 ID with `--track`. Difficulty is never passed to the policy.
 
 | Track | Simulator ID | Expert difficulty | Study role | Contacts / rows (%) | Off-track time (%) |
@@ -61,3 +63,16 @@ ID with `--track`. Difficulty is never passed to the policy.
 Diagnostic JSON is distributed in `study-data.zip` under
 `runs/expert-road-quality-final/metrics.json`. The distinction between native
 rescues and the expert’s reversing recovery routine is preserved.
+
+## Separate ablation
+
+`sac_sym` (viewer name **SAC + symmetric sampling**) is the additional 20-demo
+ablation, using training seed 0. It is separate from the original four release
+policies. Its completed seed-0 checkpoint is included in the default viewer
+when the SAC symmetric sampling add-on archive is restored. Open it directly with:
+
+```sh
+uv run python -m kartstudy.playback --root runs/ablation-sac-sym-demo20 --policy sac_sym
+```
+
+See the [ablation protocol](study.md#additional-20-demo-symmetric-sampling-ablation).

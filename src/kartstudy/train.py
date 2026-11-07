@@ -110,7 +110,7 @@ def run(config, out):
     steps = updates = expert_queries = eval_steps = episodes = 0
     round_index = 0
     algo = config["algo"]
-    if algo not in ["bc", "dagger", "sac", "rlpd"]:
+    if algo not in ["bc", "dagger", "sac", "sac_sym", "rlpd"]:
         raise ValueError(f"Unknown algorithm: {algo}")
     offline = online = learner = None
     labels_obs = labels_actions = None
