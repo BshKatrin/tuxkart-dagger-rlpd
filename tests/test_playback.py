@@ -9,6 +9,37 @@ from kartstudy.playback import discover_runs, load_actor
 from kartstudy.tracks import ALL_TRACKS
 
 
+def test_playback_offers_nonstudy_tracks_with_learned_policies(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import pystk2
+
+    from kartstudy import playback, viewer
+
+    tracks = ["lighthouse", "zengarden", "snowtuxpeak"]
+    assert "zengarden" not in ALL_TRACKS
+    monkeypatch.setattr(pystk2, "list_tracks", lambda mode: tracks)
+    player = playback.Playback(tmp_path)
+    player.catalog = {("lighthouse", "dagger", 0): tmp_path}
+    actor = object()
+    player.actors[tmp_path] = (actor, {}, 100)
+    resets = []
+
+    def reset(**kwargs):
+        resets.append(kwargs)
+        return None, {}
+
+    player.env = SimpleNamespace(reset=reset)
+    player.start(method="dagger", track="zengarden", render=False)
+    assert set(dict(viewer.choices(player, "track"))) == set(tracks)
+    assert "dagger" in dict(viewer.choices(player, "method"))
+    assert viewer.choices(player, "train_seed") == [(0, "Training seed 0")]
+    viewer.select(player, "track", "snowtuxpeak")
+    assert player.method == "dagger"
+    assert player.actor is actor
+    assert resets[-1]["track"] == "snowtuxpeak"
+
+
 def test_playback_catalog_requires_completed_checkpoint_and_unique_training_run(
     tmp_path,
 ):
@@ -100,7 +131,29 @@ def test_remote_timeout_is_bounded_and_closes_stalled_worker():
 
 
 def test_viewer_steps_do_not_toggle_controls_or_status(monkeypatch):
+    import os
+    import subprocess
+    import sys
     from types import SimpleNamespace
+
+    # Native simulator tests initialize Cocoa/SDL. Tk must use a fresh process.
+    if os.environ.get("KARTSTUDY_TK_TEST_CHILD") != "1":
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                f"{__file__}::test_viewer_steps_do_not_toggle_controls_or_status",
+            ],
+            env=os.environ | {"KARTSTUDY_TK_TEST_CHILD": "1"},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
 
     tk = pytest.importorskip("tkinter")
     from tkinter import ttk
@@ -154,3 +207,20 @@ def test_viewer_steps_do_not_toggle_controls_or_status(monkeypatch):
     assert not any("state" in update for update in updates)
     assert sum("values" in update for update in updates) == 2  # Initial selectors only.
     assert len(messages) == 1  # Stable status throughout playback.
+
+
+def test_selection_can_register_a_separate_ablation(tmp_path):
+    root = tmp_path / "study"
+    root.mkdir()
+    run = tmp_path / "ablation" / "sac_sym_s0"
+    run.mkdir(parents=True)
+    (run / "config.json").write_text(
+        json.dumps({"algo": "sac_sym", "seed": 0, "schema_version": SCHEMA_VERSION})
+    )
+    (run / "status.json").write_text(json.dumps({"status": "completed"}))
+    (run / "actor.pt").touch()
+    (root / "selected-policies.json").write_text(
+        json.dumps({"sac_sym": "../ablation/sac_sym_s0"})
+    )
+    catalog = discover_runs(root)
+    assert catalog[("lighthouse", "sac_sym", 0)] == run

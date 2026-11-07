@@ -57,20 +57,32 @@ def main():
     root = args.root
     manifest = json.loads((root / "manifest.json").read_text())
     selection = json.loads((root / "selected-policies.json").read_text())
-    if set(selection) != {"bc", "dagger", "sac", "rlpd"}:
+    if set(selection) not in (
+        {"bc", "dagger", "sac", "rlpd"},
+        {"bc", "dagger", "sac", "sac_sym", "rlpd"},
+    ):
         raise ValueError("Select exactly one completed policy per method")
     if manifest["state"] not in {"stopped", "completed"}:
         raise ValueError("Stop the suite before packaging")
     datasets, retained, originals, extras = set(), [], [], []
     inventory = []
-    for job in manifest["jobs"]:
+    jobs = list(manifest["jobs"])
+    known = {Path(job["output"]).resolve() for job in jobs}
+    for value in selection.values():
+        run = (root / value).resolve()
+        if run not in known:
+            jobs.append({"output": str(run.relative_to(Path.cwd()))})
+    for job in jobs:
         run = Path(job["output"])
         status_path = run / "status.json"
         if not status_path.exists():
             continue
         status = json.loads(status_path.read_text())
         config = json.loads((run / "config.json").read_text())
-        chosen = selection.get(config["algo"]) == run.name
+        chosen = (
+            config["algo"] in selection
+            and (root / selection[config["algo"]]).resolve() == run.resolve()
+        )
         if config.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("Incompatible suite schema")
         if chosen and (
@@ -108,6 +120,13 @@ def main():
                 )
             retained.extend(files + [actor_path])
             originals.append(run / "checkpoint.pt")
+            if run.parent.resolve() != root.resolve():
+                retained.extend(
+                    p
+                    for p in run.parent.glob("*")
+                    if p.is_file()
+                    and p.name in {"source.tar.gz", "comparison.json", "config.json"}
+                )
             dataset = Path(config["dataset"])
             datasets.update([dataset, dataset.with_suffix(".json")])
         else:
@@ -115,7 +134,7 @@ def main():
                 files
                 + ([run / "checkpoint.pt"] if (run / "checkpoint.pt").exists() else [])
             )
-    if sum(row["retained"] for row in inventory) != 4:
+    if sum(row["retained"] for row in inventory) != len(selection):
         raise ValueError("Missing selected policies")
     metadata = [
         root / name
@@ -162,7 +181,7 @@ def main():
         "packaging_script_sha256": sha256(Path(__file__)),
         "assets": assets,
         "extraction": "Extract selected-policies.zip and study-data.zip at the repository root. Other ZIPs are optional.",
-        "included": "Four retained policies, optional extra and stopped runs, demonstrations, expert diagnostics, original training source snapshot and full checkpoints.",
+        "included": "Selected seed-0 policies, optional extra and stopped runs, demonstrations, expert diagnostics, original training source snapshot and full checkpoints.",
         "excluded": "Pilot runs, rendered videos, operational launch/PID files and the virtual environment.",
     }
     (args.output / "artifact-manifest.json").write_text(

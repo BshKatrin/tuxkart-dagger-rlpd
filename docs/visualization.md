@@ -1,7 +1,8 @@
 # Policy playback
 
-Restore the release first: extract `selected-policies.zip` and `study-data.zip`
-at the repository root, then run `uv sync --locked`.
+Restore the base release first: extract `selected-policies.zip` and `study-data.zip`
+at the repository root. Extract the newer `sac-sym-policy.zip` add-on afterward
+to register the fifth learned policy, then run `uv sync --locked`.
 
 ```sh
 uv run python -m kartstudy.playback
@@ -9,11 +10,11 @@ uv run python -m kartstudy.playback --policy rlpd --track stk_enterprise
 uv run python -m kartstudy.playback --policy expert --track lighthouse
 ```
 
-The default is DAgger. Select Policy and Track in the Tk window. The four learned
-policies all retain **training seed 0**, alongside the original expert reference.
+The default is DAgger. Select Policy and Track in the Tk window. The five learned
+policies (including the SAC symmetric sampling add-on) all retain **training seed 0**, alongside the original expert reference.
 [Tracks and policies](tracks-and-policies.md) lists every CLI name, simulator track
-ID, difficulty group and training/evaluation role. The viewer offers the 13 study
-tracks; eight unused tracks are listed for reference only.
+ID, difficulty group and training/evaluation role. The viewer offers all installed
+race tracks, including tracks outside the study, with every available policy.
 
 - **Pause / Play** (Space): pause or resume simulation.
 - **Step →** (Right arrow): advance one 0.1-second action and pause.

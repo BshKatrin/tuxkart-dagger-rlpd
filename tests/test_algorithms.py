@@ -141,7 +141,7 @@ def test_saturated_policy_density_stays_finite_and_imitation_learns():
     )
 
 
-@pytest.mark.parametrize("algo", ["bc", "dagger", "sac", "rlpd"])
+@pytest.mark.parametrize("algo", ["bc", "dagger", "sac", "sac_sym", "rlpd"])
 def test_shared_training_enforces_track_quotas_and_excludes_validation_and_evaluation(
     tmp_path, monkeypatch, algo
 ):
@@ -258,7 +258,7 @@ def test_shared_training_enforces_track_quotas_and_excludes_validation_and_evalu
     assert status["status"] == "completed"
     assert status["track_steps"] == dict.fromkeys(tracks, 0 if algo == "bc" else 5)
     state = torch.load(out / "checkpoint.pt", weights_only=False)
-    if algo in ("sac", "rlpd"):
+    if algo in ("sac", "sac_sym", "rlpd"):
         replay = state["replay"]._storage
         assert set(replay.obs[:, 0].tolist()) == {0, 1}
         assert torch.equal(replay.obs, replay.next_obs)
