@@ -97,6 +97,20 @@ def write_evaluations(path, rows):
     )
 
 
+def test_cuda_results_must_be_compared_separately_from_metal(runs):
+    for path in runs:
+        config = json.loads((path / "config.json").read_text())
+        config["device"] = "cuda"
+        (path / "config.json").write_text(json.dumps(config))
+        provenance = json.loads((path / "provenance.json").read_text())
+        provenance["configuration"] = config
+        (path / "provenance.json").write_text(json.dumps(provenance))
+        if path != runs[-1]:
+            with pytest.raises(ValueError, match="configurations do not match"):
+                build_comparison(runs)
+    assert build_comparison(runs)["common_settings"]["device"] == "cuda"
+
+
 def read_evaluations(path):
     return [
         json.loads(line)

@@ -174,3 +174,10 @@ seeds contributing to each metric. Do not substitute launcher progress summaries
 for these final statistics. BC's fitted assessment is a reference point, not a
 historical online learning curve. Genuine evolution replays use recorded actor
 snapshots from new runs; final actors cannot reconstruct past training states.
+
+Future Linux/CUDA runs retain these algorithms, controls and budgets but form a
+separate backend family. Use the [WSL readiness checks](wsl.md), restore the same
+demonstrations and qualify the expert against the actual Linux source before a
+suite. Readiness fixtures are not study evaluations. Keep backend counts and
+provenance explicit; do not pool them with the completed Metal runs. The final
+comparison rejects mixed training devices.

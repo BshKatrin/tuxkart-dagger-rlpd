@@ -22,7 +22,9 @@ Use Python 3.12 and `uv` for dependencies and commands:
 uv sync --locked
 ```
 
-Training uses PyTorch Metal (`mps`) explicitly; it errors if unavailable.
+Training defaults to PyTorch Metal (`mps`) explicitly; it errors if unavailable.
+Qualified WSL training selects `--device cuda` through the process-local CUDA
+wrapper; installation and checks are in [docs/wsl.md](docs/wsl.md).
 Simulation and rollout/evaluation inference run on CPU. Keep one native simulator
 per worker process, rather than sharing it between threads. The simulator
 downloads its assets on first use. Limit concurrent learners based on measured

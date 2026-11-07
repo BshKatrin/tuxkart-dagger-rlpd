@@ -269,7 +269,7 @@ def build_comparison(run_dirs, bootstrap_samples=2000):
     if len(set(identities)) != len(identities):
         raise ValueError("Duplicate method/training seed would count one run twice")
     runs.sort(key=lambda run: (METHODS.index(run["method"]), run["seed"]))
-    excluded = {"algo", "seed", "device", "dataset", "utd"}
+    excluded = {"algo", "seed", "dataset", "utd"}
     configurations = [
         {key: value for key, value in run["config"].items() if key not in excluded}
         for run in runs

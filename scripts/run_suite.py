@@ -21,8 +21,10 @@ from kartstudy.train import defaults, write_json
 
 
 def experiment_specs(
-    dataset=None, methods=("bc", "dagger", "sac", "rlpd"), seeds=range(5)
+    dataset=None, methods=("bc", "dagger", "sac", "rlpd"), seeds=range(5), device="mps"
 ):
+    if device not in ("mps", "cuda"):
+        raise ValueError("Suite device must be mps or cuda; no automatic CPU fallback")
     if (
         not methods
         or len(set(methods)) != len(methods)
@@ -32,16 +34,25 @@ def experiment_specs(
         )
     ):
         raise ValueError("Select unique supported methods")
-    if not seeds or len(set(seeds)) != len(seeds) or any(
-        isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32
-        for seed in seeds
+    if (
+        not seeds
+        or len(set(seeds)) != len(seeds)
+        or any(
+            isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32
+            for seed in seeds
+        )
     ):
         raise ValueError("Select unique 32-bit nonnegative training seeds")
     return [
         (
             f"shared_{algo}_s{seed}",
             defaults()
-            | {"algo": algo, "seed": seed, "utd": 4 if algo == "rlpd" else 1}
+            | {
+                "algo": algo,
+                "seed": seed,
+                "device": device,
+                "utd": 4 if algo == "rlpd" else 1,
+            }
             | ({"dataset": dataset} if dataset else {}),
         )
         for seed in seeds
@@ -53,6 +64,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="runs/study-polar-four")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--device", choices=("mps", "cuda"), default="mps")
     parser.add_argument("--dataset", default=defaults()["dataset"])
     parser.add_argument(
         "--methods",
@@ -67,7 +79,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
         parser.error("Use 1–4 workers")
-    specs = experiment_specs(args.dataset, args.methods, args.seeds)
+    specs = experiment_specs(args.dataset, args.methods, args.seeds, args.device)
     validate_dataset(
         args.dataset,
         specs[0][1]["tracks"],

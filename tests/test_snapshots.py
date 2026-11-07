@@ -52,10 +52,20 @@ def test_snapshots_preserve_rng_actor_and_unique_boundaries(tmp_path):
 
 @pytest.mark.parametrize(
     "algo, stopped",
-    [("bc", False), ("dagger", False), ("sac", False), ("rlpd", False), ("sac", True)],
+    [
+        ("bc", False),
+        ("dagger", False),
+        ("sac", False),
+        ("sac_sym", False),
+        ("rlpd", False),
+        ("sac", True),
+    ],
+)
+@pytest.mark.parametrize(
+    "device", ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 )
 def test_tiny_training_logging_preserves_weights_counters_and_rng(
-    tmp_path, monkeypatch, algo, stopped
+    tmp_path, monkeypatch, algo, stopped, device
 ):
     """Two identical disposable mocked runs isolate the effect of export logging."""
     dataset = tmp_path / "dataset.npz"
@@ -119,13 +129,15 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
         random.random()
         np.random.random()
         torch.rand(1)
+        if device == "cuda":
+            torch.rand(1, device="cuda")
         return [{"seed": seed, "steps": 1} for seed in seeds]
 
     monkeypatch.setattr(train, "DrivingEnv", Env)
     monkeypatch.setattr(train, "evaluate", evaluate)
     config = train.defaults() | {
         "algo": algo,
-        "device": "cpu",
+        "device": device,
         "dataset": str(dataset),
         "tracks": ["lighthouse"],
         "steps": 4,
@@ -141,12 +153,29 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
         "warmup": 0,
     }
     baseline, logged = tmp_path / "baseline", tmp_path / "logged"
+    cuda_boundaries = {}
+    original_export = train.export_actor_snapshot
+
+    def export(*args, **kwargs):
+        if device == "cuda":
+            cuda_boundaries.setdefault((args[3], args[4]), []).append(
+                torch.cuda.get_rng_state_all()
+            )
+        return original_export(*args, **kwargs)
+
+    monkeypatch.setattr(train, "export_actor_snapshot", export)
     with monkeypatch.context() as context:
         context.setattr(train, "export_actor_snapshot", lambda *a, **kw: None)
         train.run(config, baseline)
     baseline_rng = rng_state()
+    baseline_cuda = torch.cuda.get_rng_state_all() if device == "cuda" else None
     train.run(config, logged)
     assert_rng_equal(baseline_rng, rng_state())
+    if baseline_cuda is not None:
+        for expected, actual in zip(
+            baseline_cuda, torch.cuda.get_rng_state_all(), strict=True
+        ):
+            torch.testing.assert_close(expected, actual, rtol=0, atol=0)
     a = torch.load(baseline / "checkpoint.pt", weights_only=False)
     b = torch.load(logged / "checkpoint.pt", weights_only=False)
     assert a["step"] == b["step"] and a["updates"] == b["updates"]
@@ -155,6 +184,13 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
         (a["rng_python"], a["rng_numpy"], a["rng_torch"]),
         (b["rng_python"], b["rng_numpy"], b["rng_torch"]),
     )
+    if device == "cuda":
+        for expected, actual in zip(a["rng_cuda"], b["rng_cuda"], strict=True):
+            torch.testing.assert_close(expected, actual, rtol=0, atol=0)
+        for boundaries in cuda_boundaries.values():
+            for boundary in boundaries[1:]:
+                for expected, actual in zip(boundaries[0], boundary, strict=True):
+                    torch.testing.assert_close(expected, actual, rtol=0, atol=0)
     for name in ("evaluations.jsonl", "training.jsonl", "episodes.jsonl"):
         if (baseline / name).exists():
 

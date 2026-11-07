@@ -21,6 +21,14 @@ def test_selected_replications_keep_existing_budgets_and_update_schedules():
         assert config["eval_every"] == 40000 and config["demo_episodes"] == 20
 
 
+def test_cuda_suite_changes_only_the_explicit_device():
+    metal = specs(methods=("sac", "sac_sym", "rlpd"), seeds=(1,))
+    cuda = specs(methods=("sac", "sac_sym", "rlpd"), seeds=(1,), device="cuda")
+    assert cuda == [(name, config | {"device": "cuda"}) for name, config in metal]
+    with pytest.raises(ValueError, match="no automatic CPU fallback"):
+        specs(device="cpu")
+
+
 @pytest.mark.parametrize(
     "methods,seeds",
     [

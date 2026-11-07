@@ -52,6 +52,19 @@ def next_training_track(counts, budget):
     return min(eligible, key=counts.get) if eligible else None
 
 
+def validate_device(device):
+    if device not in ("cpu", "mps", "cuda"):
+        raise ValueError("Training device must be cpu, mps or cuda")
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError(
+            "Metal requested but unavailable; refusing silent CPU fallback"
+        )
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA requested but unavailable; refusing silent CPU fallback"
+        )
+
+
 def run(config, out):
     if config.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Incompatible training configuration")
@@ -63,14 +76,11 @@ def run(config, out):
         or config["steps"] != config["steps_per_track"] * len(tracks)
     ):
         raise ValueError("Require training-only tracks and an exact per-track budget")
+    device = config["device"]
+    validate_device(device)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
     seed_all(config["seed"])
-    device = config["device"]
-    if device == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError(
-            "Metal requested but unavailable; refusing silent CPU fallback"
-        )
     write_json(out / "config.json", config)
     write_json(
         out / "provenance.json",
@@ -166,6 +176,7 @@ def run(config, out):
             "rng_numpy": np.random.get_state(),
             "rng_torch": torch.get_rng_state(),
             "rng_mps": torch.mps.get_rng_state() if device == "mps" else None,
+            "rng_cuda": torch.cuda.get_rng_state_all() if device == "cuda" else None,
         }
         torch.save(state, out / "checkpoint.tmp")
         (out / "checkpoint.tmp").replace(out / "checkpoint.pt")
@@ -198,6 +209,7 @@ def run(config, out):
             np.random.get_state(),
             torch.get_rng_state(),
         )
+        rng_cuda = torch.cuda.get_rng_state_all() if device == "cuda" else None
         try:
             records = []
             evaluation_tracks = list(tracks)
@@ -238,6 +250,8 @@ def run(config, out):
             random.setstate(rng_py)
             np.random.set_state(rng_np)
             torch.set_rng_state(rng_torch)
+            if rng_cuda is not None:
+                torch.cuda.set_rng_state_all(rng_cuda)
 
     record_status(
         "running", "fitting" if algo in ["bc", "dagger"] else "initial_evaluation"
