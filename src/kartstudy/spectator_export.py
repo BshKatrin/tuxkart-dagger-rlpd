@@ -161,6 +161,14 @@ def export(
             "sampling": "uniform presentation intervals plus exact terminal endpoint",
             "terminal_hold_seconds": len(times) / fps - (times[-1] - times[0]),
             "camera": camera.to_dict(),
+            "camera_clock": "race-relative; deterministic under seeking and export FPS",
+            "camera_keyframes_sha256": (
+                hashlib.sha256(
+                    json.dumps(camera.to_dict()["keyframes"], sort_keys=True).encode()
+                ).hexdigest()
+                if camera.keyframes
+                else None
+            ),
             "visible_ghosts": visible,
             "labels": comparison.ghosts,
             "terminal_poses": terminal["poses"],

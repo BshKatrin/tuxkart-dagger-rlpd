@@ -8,7 +8,7 @@ import time
 
 import numpy as np
 
-from .spectator_camera import CameraSettings, camera_pose
+from .spectator_camera import CameraRig, CameraSettings
 
 
 def _render_worker(connection, path, width, height):
@@ -22,6 +22,7 @@ def _render_worker(connection, path, width, height):
             replay.track, replay.ghosts, width=width, height=height, seed=replay.seed
         )
         geometry = native.geometry()
+        rig = CameraRig(replay, geometry)
         while True:
             operation, arguments = connection.recv()
             if operation == "close":
@@ -38,7 +39,7 @@ def _render_worker(connection, path, width, height):
                     dict(p, visible=p["visible"] and p["key"] in visible)
                     for p in replay.sample(time)
                 ]
-                camera = camera_pose(settings, poses, geometry, width / height)
+                camera = rig.pose(settings, time, visible, width / height)
                 native.set_ghost_poses(poses)
                 native.set_camera(camera)
                 frame = np.asarray(native.render())
@@ -48,6 +49,8 @@ def _render_worker(connection, path, width, height):
                     "time": time,
                     "poses": poses,
                     "camera": camera,
+                    "camera_mode": settings.mode,
+                    "pack_size": settings.pack_size,
                     "training_seed": replay.manifest.get(
                         "training_seed",
                         replay.manifest.get("train_seed", "unspecified"),

@@ -102,6 +102,13 @@ captures; released official evaluations remain authoritative.
   and adjust distance, height and orbit to frame the bend.
 - **Overview:** frames the visible ghost group, zooming out as the group spreads.
 - **Chase:** closer to the selected ghost for inspecting steering and recovery.
+- **Rail:** travels along the native track centreline at the leading visible
+  group's progress, looking ahead into bends rather than copying kart steering.
+- **Pack:** frames the leading visible ghosts, facing along the track. Set
+  **Front pack** to choose how many to include; the minimap retains the others.
+- **Side:** tracks beside the centreline at the front group's pace. Orbit selects
+  the side/angle; distance and height control clearance.
+- **Cinematic:** a moving orbit/height preset, or a loaded world-space camera path.
 
 The viewer exposes play/pause (Space), single presentation step (Right arrow),
 restart (R), timeline scrubbing, wall-time playback speed, ghost visibility,
@@ -109,6 +116,43 @@ follow target, camera mode, distance, height, orbit, FOV, and renderer reset.
 The minimap locates visible ghosts outside the camera view. Finished, timed-out
 and stopped laps hold their final pose and retain their status. Cameras never
 switch automatically. A hidden follow target still anchors the follow camera.
+
+Rail, pack and side rank ghosts by projected track progress, with loop continuity,
+rather than instantaneous speed. This projected ordering is for camera framing,
+not an official evaluation metric. **Look ahead (m)** and **Smoothing (s)** adjust
+the framing. Camera motion is sampled on a fixed replay-time grid and evaluated
+independently of the order of seeks or export FPS. Smoothing is for presentation;
+it does not alter ghost trajectories, race time, or evaluation measurements.
+The smoothing value is a Gaussian sigma in seconds. This offline, centred filter
+can anticipate movement or rescues within its window; zero disables smoothing.
+Loaded world-space keyframes instead use smoothstep interpolation and preserve
+their marked endpoints; the Gaussian smoothing control does not affect them.
+
+For a saved cinematic path, pause, scrub to a moment, adjust any camera and click
+**Mark displayed shot**. Repeat at later times, then **Save camera path** to a new
+JSON file. **Load camera path** selects cinematic playback; **Use built-in path**
+restores the preset. Marks use the actual displayed native pose and timestamp,
+which can lag the requested time during rendering. The path holds its endpoint
+poses outside its time range. Existing files are never overwritten.
+
+The JSON contains a `keyframes` list. Each entry has `time` in race seconds,
+three-component world-space `position` and `target`, and `fov` in degrees.
+Times must increase strictly. Export embeds the validated keyframes and their
+checksum in its sidecar. World-space paths are track-specific and can pass through
+scenery: inspect the whole clip before using it in a presentation.
+
+```sh
+uv run --locked python -m kartstudy.spectator view \
+  runs/visualizations/polar-four-lighthouse-s0-e20000-final --camera rail \
+  --pack-size 2 --lookahead 6 --smoothing 0.5
+uv run --locked python -m kartstudy.spectator export \
+  runs/visualizations/polar-four-lighthouse-s0-e20000-final \
+  runs/visualizations/lighthouse-pack-preview.mp4 --camera pack --start 0 --end 18
+uv run --locked python -m kartstudy.spectator export \
+  runs/visualizations/polar-four-lighthouse-s0-e20000-final \
+  runs/visualizations/lighthouse-scripted.mp4 --camera cinematic \
+  --camera-script runs/visualizations/my-camera-path.json
+```
 
 Tk runs in the parent process and native rendering in a dedicated child. Loading
 and frame requests run outside Tk's event loop; timeouts are bounded at 30 and

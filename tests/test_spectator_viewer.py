@@ -97,6 +97,26 @@ def test_controls_seek_step_restart_speed_and_endpoint():
         controls.seek(float("nan"))
 
 
+def test_moving_camera_labels_preserve_race_metadata_and_minimap():
+    frame = np.zeros((540, 960, 3), dtype=np.uint8)
+    metadata = {
+        "time": 0.05,
+        "poses": poses(0.05, [g["key"] for g in GHOSTS]),
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "pack_size": 2,
+    }
+    for mode in ("rail", "pack", "side", "cinematic"):
+        annotated = np.asarray(
+            annotated_frame(
+                frame, metadata | {"camera_mode": mode}, GHOSTS, GEOMETRY, "lighthouse"
+            )
+        )
+        assert annotated[5:25, :400].any()  # Camera label.
+        assert annotated[-125:, :700].any()  # Unchanged replay/status labels.
+        assert annotated[10:150, -160:].any()  # Off-screen ghosts on minimap.
+
+
 def test_async_requests_never_block_and_coalesce_latest_seek_but_keep_reset():
     frames = AsyncFrames()
     gate = threading.Event()
@@ -235,8 +255,11 @@ except pytest.skip.Exception:
 
 
 def _tk_probe():
+    import json
+    import tempfile
+
     tk = pytest.importorskip("tkinter")
-    from tkinter import ttk
+    from tkinter import filedialog, ttk
 
     from kartstudy import spectator_viewer
 
@@ -254,6 +277,8 @@ def _tk_probe():
         manifest={"train_seed": 0},
     )
     renderer = SimpleNamespace(width=640, height=360, metadata={"geometry": GEOMETRY})
+    directory = tempfile.TemporaryDirectory()
+    saved_path = Path(directory.name) / "camera.json"
 
     def response(seconds, camera, visible):
         started = time.perf_counter()
@@ -261,7 +286,8 @@ def _tk_probe():
         delays.append((started, time.perf_counter()))
         calls.append((seconds, camera, list(visible)))
         return {
-            "time": seconds,
+            "time": 1.2345,  # Displayed response can lag the current requested time.
+            "camera": {"position": [4, 7, -10], "target": [4, 0, 0], "fov": np.pi / 3},
             "poses": poses(seconds, visible),
             "frame": np.zeros((360, 640, 3), dtype=np.uint8),
         }
@@ -293,18 +319,35 @@ def _tk_probe():
                 widget.invoke()
         buttons["Reset renderer"].invoke()
 
+    def author_path():
+        buttons = {
+            w.cget("text"): w for w in widgets(root) if isinstance(w, ttk.Button)
+        }
+        buttons["Use built-in path"].invoke()
+        buttons["Mark displayed shot"].invoke()
+        buttons["Save camera path"].invoke()
+        buttons["Load camera path"].invoke()
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(tk, "Tk", lambda: root)
+        patch.setattr(filedialog, "asksaveasfilename", lambda **kwargs: str(saved_path))
+        patch.setattr(filedialog, "askopenfilename", lambda **kwargs: str(saved_path))
         root.after(10, heartbeat)
         root.after(250, interact)
+        root.after(750, author_path)
         root.after(1500, lambda: root.tk.call(root.protocol("WM_DELETE_WINDOW")))
-        spectator_viewer.show(renderer, fixture, quit_after_frames=5)
+        spectator_viewer.show(renderer, fixture, quit_after_frames=12)
     assert len(heartbeats) > 20
     assert calls
     assert all(
         sum(start < beat < end for beat in heartbeats) >= 3 for start, end in delays
     )
     assert any("bc" not in visible for _, _, visible in calls)
+    keyframe = json.loads(saved_path.read_text())["keyframes"][0]
+    assert keyframe["time"] == 1.2345
+    assert keyframe["position"] == [4, 7, -10] and keyframe["fov"] == pytest.approx(60)
+    assert any(c.mode == "cinematic" and c.keyframes for _, c, _ in calls)
+    directory.cleanup()
 
 
 def test_queued_reset_survives_failed_request():

@@ -4,12 +4,53 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 
 import numpy as np
 
 from .spectator_contract import CameraPose, GhostPose, TrackGeometry
+from .spectator_director import CameraRig
 
-CAMERA_MODES = ("follow", "corner", "overview", "chase")
+__all__ = [
+    "CAMERA_MODES",
+    "CameraKeyframe",
+    "CameraRig",
+    "CameraSettings",
+    "camera_pose",
+]
+
+CAMERA_MODES = (
+    "follow",
+    "corner",
+    "overview",
+    "chase",
+    "rail",
+    "pack",
+    "side",
+    "cinematic",
+)
+
+
+@dataclass(frozen=True)
+class CameraKeyframe:
+    time: float
+    position: tuple[float, float, float]
+    target: tuple[float, float, float]
+    fov: float = 60.0
+
+    def __post_init__(self):
+        for name in ("position", "target"):
+            vector = tuple(float(v) for v in getattr(self, name))
+            if len(vector) != 3 or not all(math.isfinite(v) for v in vector):
+                raise ValueError("Keyframes require finite 3D positions and targets")
+            object.__setattr__(self, name, vector)
+        if not math.isfinite(self.time) or self.time < 0:
+            raise ValueError("Keyframe times must be finite and nonnegative")
+        if not math.isfinite(self.fov) or not 10 <= self.fov <= 120:
+            raise ValueError("Keyframe FOV must be between 10 and 120 degrees")
+        direction = np.subtract(self.target, self.position)
+        if np.linalg.norm(direction[[0, 2]]) < 1e-6:
+            raise ValueError("Keyframes require a nonvertical viewing direction")
 
 
 @dataclass(frozen=True)
@@ -21,12 +62,24 @@ class CameraSettings:
     orbit: float = 0.0  # degrees around world Y
     fov: float = 60.0  # degrees at the user boundary
     segment: int = 0
+    pack_size: int = 2
+    lookahead: float = 6.0
+    smoothing: float = 0.5
+    keyframes: tuple[CameraKeyframe, ...] = ()
 
     def __post_init__(self):
         if self.mode not in CAMERA_MODES:
             raise ValueError(f"Unknown camera mode: {self.mode}")
         if not all(
-            math.isfinite(x) for x in (self.distance, self.height, self.orbit, self.fov)
+            math.isfinite(x)
+            for x in (
+                self.distance,
+                self.height,
+                self.orbit,
+                self.fov,
+                self.lookahead,
+                self.smoothing,
+            )
         ):
             raise ValueError("Camera values must be finite")
         if self.distance <= 0 or self.height < 0 or not 10 <= self.fov <= 120:
@@ -35,9 +88,49 @@ class CameraSettings:
             )
         if self.segment < 0:
             raise ValueError("Corner segment must be nonnegative")
+        if (
+            isinstance(self.pack_size, bool)
+            or not isinstance(self.pack_size, int)
+            or not 1 <= self.pack_size <= 32
+        ):
+            raise ValueError("Pack size must be an integer between 1 and 32")
+        if self.lookahead < 0 or not 0 <= self.smoothing <= 5:
+            raise ValueError(
+                "Lookahead must be nonnegative and smoothing between 0 and 5 seconds"
+            )
+        try:
+            frames = tuple(
+                f if isinstance(f, CameraKeyframe) else CameraKeyframe(**f)
+                for f in self.keyframes
+            )
+        except (TypeError, OverflowError) as exc:
+            raise ValueError("Malformed camera keyframe") from exc
+        for left, right in pairwise(frames):
+            if left.time >= right.time:
+                raise ValueError("Keyframe times must be strictly increasing")
+            # The native camera has a fixed Y-up vector. Reject transitions that
+            # interpolate through a coincident or vertical look direction.
+            a = np.subtract(left.target, left.position)[[0, 2]]
+            b = np.subtract(right.target, right.position)[[0, 2]] - a
+            u = np.clip(-np.dot(a, b) / max(float(np.dot(b, b)), 1e-12), 0, 1)
+            if np.linalg.norm(a + u * b) < 1e-6:
+                raise ValueError(
+                    "Keyframe transition crosses a vertical viewing direction"
+                )
+        object.__setattr__(self, "keyframes", frames)
 
     def to_dict(self):
-        return asdict(self)
+        result = asdict(self)
+        result["keyframes"] = [
+            {
+                "time": frame.time,
+                "position": list(frame.position),
+                "target": list(frame.target),
+                "fov": frame.fov,
+            }
+            for frame in self.keyframes
+        ]
+        return result
 
 
 def camera_pose(
@@ -49,6 +142,8 @@ def camera_pose(
     """Use the same sampled poses for GUI and video; never switch modes implicitly."""
     if not math.isfinite(aspect) or aspect <= 0:
         raise ValueError("Camera aspect ratio must be positive")
+    if settings.mode in ("rail", "pack", "side", "cinematic"):
+        raise ValueError("Moving cameras require CameraRig and a replay timestamp")
     segments = np.asarray(geometry["segments"], dtype=float).reshape(-1, 2, 3)
     fov = math.radians(settings.fov)
     if settings.mode == "overview":

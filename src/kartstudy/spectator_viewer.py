@@ -137,6 +137,18 @@ def annotated_frame(frame, metadata, ghosts, geometry, track):
     scale = max(1, image.width / 960)
     font = ImageFont.load_default(size=round(14 * scale))
     line = round(20 * scale)
+    camera_labels = {
+        "rail": "TRACK-RAIL DRONE",
+        "pack": "FRONT PACK",
+        "side": "SIDE TRACKING",
+        "cinematic": "CINEMATIC CAMERA PATH",
+    }
+    if metadata.get("camera_mode") in camera_labels:
+        label = camera_labels[metadata["camera_mode"]]
+        if metadata["camera_mode"] == "pack":
+            label += f" ({metadata.get('pack_size', 2)})"
+        draw.rectangle((0, 0, image.width, line + 10), fill="#101820")
+        draw.text((10, 5), label, font=font, fill="white")
     preview = bool(metadata.get("preview_only", False))
     strip = (len(ghosts) + 2 + int(preview)) * line + 12
     draw.rectangle((0, image.height - strip, image.width, image.height), fill="#101820")
@@ -228,6 +240,8 @@ def show(renderer, comparison, camera=None, visible=None, *, quit_after_frames=N
     last_tick = last_request = time.perf_counter()
     scrub_update = False
     last_requested_time = None
+    last_displayed = None
+    marked_keyframes = []
 
     def request(reset=False):
         nonlocal last_requested_time
@@ -366,6 +380,115 @@ def show(renderer, comparison, camera=None, visible=None, *, quit_after_frames=N
         box.bind("<FocusOut>", change)
         if name == "segment":
             segment_box = box
+    motion = ttk.Frame(root, padding=(8, 0, 8, 4))
+    motion.pack(fill="x")
+    for name, title, start, end, increment in [
+        ("pack_size", "Front pack", 1, min(32, len(comparison.ghosts)), 1),
+        ("lookahead", "Look ahead (m)", 0, 100, 1),
+        ("smoothing", "Smoothing (s)", 0, 5, 0.1),
+    ]:
+        ttk.Label(motion, text=title).pack(side="left", padx=(4, 0))
+        variable = tk.StringVar(value=str(getattr(controls.camera, name)))
+        box = ttk.Spinbox(
+            motion,
+            from_=start,
+            to=end,
+            increment=increment,
+            textvariable=variable,
+            width=5,
+        )
+        box.pack(side="left")
+
+        def motion_change(event=None, field=name, var=variable):
+            try:
+                value = int(var.get()) if field == "pack_size" else float(var.get())
+                camera_change(field, value)
+            except ValueError as exc:
+                status.set(str(exc))
+
+        box.configure(command=motion_change)
+        box.bind("<Return>", motion_change)
+        box.bind("<FocusOut>", motion_change)
+
+    def load_path():
+        from tkinter import filedialog
+
+        from .spectator import load_camera_script
+
+        path = filedialog.askopenfilename(
+            parent=root, title="Load camera path", filetypes=[("Camera path", "*.json")]
+        )
+        if path:
+            try:
+                controls.camera = replace(
+                    controls.camera,
+                    mode="cinematic",
+                    keyframes=load_camera_script(path),
+                )
+                mode.set("cinematic")
+                if ready:
+                    request()
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                status.set(str(exc))
+
+    def reset_path():
+        controls.camera = replace(controls.camera, mode="cinematic", keyframes=())
+        mode.set("cinematic")
+        if ready:
+            request()
+
+    paths = ttk.Frame(root, padding=(8, 0, 8, 4))
+    paths.pack(fill="x")
+    ttk.Button(paths, text="Load camera path", command=load_path).pack(
+        side="left", padx=8
+    )
+    ttk.Button(paths, text="Use built-in path", command=reset_path).pack(side="left")
+
+    def mark_shot():
+        if last_displayed is None:
+            return
+        controls.playing = False
+        controls.seek(last_displayed["time"])
+        native_camera = last_displayed["camera"]
+        shot = {
+            "time": last_displayed["time"],
+            "position": native_camera["position"],
+            "target": native_camera["target"],
+            "fov": math.degrees(native_camera["fov"]),
+        }
+        marked_keyframes[:] = sorted(
+            [s for s in marked_keyframes if s["time"] != shot["time"]] + [shot],
+            key=lambda s: s["time"],
+        )
+        status.set(
+            f"Marked camera at race {shot['time']:.2f} s; {len(marked_keyframes)} keyframes"
+        )
+
+    def save_path():
+        from tkinter import filedialog
+
+        from .spectator import save_camera_script
+
+        if not marked_keyframes:
+            status.set("Mark at least one displayed camera pose first")
+            return
+        path = filedialog.asksaveasfilename(
+            parent=root,
+            title="Save new camera path",
+            defaultextension=".json",
+            filetypes=[("Camera path", "*.json")],
+        )
+        if path:
+            try:
+                save_camera_script(path, marked_keyframes)
+                status.set(f"Saved {len(marked_keyframes)} camera keyframes")
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                status.set(str(exc))
+
+    ttk.Button(paths, text="Mark displayed shot", command=mark_shot).pack(
+        side="left", padx=8
+    )
+    ttk.Button(paths, text="Save camera path", command=save_path).pack(side="left")
     ghosts_bar = ttk.Frame(root, padding=8)
     ghosts_bar.pack(fill="x")
     for ghost in comparison.ghosts:
@@ -397,6 +520,7 @@ def show(renderer, comparison, camera=None, visible=None, *, quit_after_frames=N
 
     def tick():
         nonlocal photo, ready, failed, count, last_tick, last_request, scrub_update
+        nonlocal last_displayed
         if closed:
             return
         now = time.perf_counter()
@@ -406,6 +530,7 @@ def show(renderer, comparison, camera=None, visible=None, *, quit_after_frames=N
         try:
             metadata = frames.poll()
             if metadata is not None:
+                last_displayed = metadata
                 ready = True
                 failed = False
                 segment_box.configure(

@@ -251,6 +251,89 @@ def test_cli_view_and_export_dispatch_config(monkeypatch, comparison, tmp_path):
     assert all(r.closed for r in renderers)
 
 
+def test_moving_camera_cli_and_saved_path_provenance(monkeypatch, comparison, tmp_path):
+    from kartstudy import spectator_process, spectator_viewer
+
+    install_replay_fixture(monkeypatch, comparison)
+    calls = []
+    monkeypatch.setattr(spectator_process, "RemoteSpectator", FixtureRenderer)
+    monkeypatch.setattr(spectator_viewer, "show", lambda r, p, c, v: calls.append(c))
+    for mode in ("rail", "pack", "side", "cinematic"):
+        spectator.main(
+            [
+                "view",
+                str(comparison.path),
+                "--camera",
+                mode,
+                "--pack-size",
+                "3",
+                "--lookahead",
+                "8",
+                "--smoothing",
+                "0.8",
+            ]
+        )
+        assert calls[-1].mode == mode
+        assert (calls[-1].pack_size, calls[-1].lookahead, calls[-1].smoothing) == (
+            3,
+            8,
+            0.8,
+        )
+    keyframes = [
+        {"time": 0, "position": [0, 7, -10], "target": [0, 0, 0], "fov": 60},
+        {"time": 1, "position": [10, 7, 0], "target": [0, 0, 0], "fov": 50},
+    ]
+    script = tmp_path / "camera.json"
+    script.write_text(json.dumps({"keyframes": keyframes}))
+    spectator.main(
+        [
+            "view",
+            str(comparison.path),
+            "--camera",
+            "cinematic",
+            "--camera-script",
+            str(script),
+        ]
+    )
+    assert calls[-1].to_dict()["keyframes"] == keyframes
+
+    def writer(*args, **kwargs):
+        while True:
+            yield
+
+    result = export(
+        FixtureRenderer(comparison.path),
+        comparison,
+        tmp_path / "path.mp4",
+        camera=calls[-1],
+        writer_factory=writer,
+    )
+    assert result["camera_keyframes_sha256"]
+    assert result["camera"]["keyframes"] == keyframes
+
+
+@pytest.mark.parametrize("data", [{}, {"keyframes": []}, {"keyframes": "bad"}])
+def test_invalid_camera_script_rejected_before_native_load(tmp_path, data):
+    path = tmp_path / "camera.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="keyframes"):
+        spectator.load_camera_script(path)
+
+
+def test_saved_camera_path_roundtrip_and_no_overwrite(tmp_path):
+    path = tmp_path / "camera.json"
+    frames = ({"time": 1, "position": [0, 7, -10], "target": [0, 0, 0], "fov": 60},)
+    spectator.save_camera_script(path, frames)
+    original = path.read_bytes()
+    assert spectator.load_camera_script(path) == frames
+    with pytest.raises(FileExistsError):
+        spectator.save_camera_script(path, frames)
+    assert path.read_bytes() == original
+    with pytest.raises(ValueError):
+        spectator.save_camera_script(tmp_path / "empty.json", ())
+    assert not (tmp_path / "empty.json").exists()
+
+
 @pytest.mark.parametrize(
     "extra",
     [

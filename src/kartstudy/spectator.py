@@ -72,6 +72,29 @@ def parser():
             nargs="*",
             help="Visible ghost keys (default: all; no keys hides all)",
         )
+        command.add_argument(
+            "--pack-size",
+            type=int,
+            default=2,
+            help="Number of leading visible ghosts to frame",
+        )
+        command.add_argument(
+            "--lookahead",
+            type=float,
+            default=6.0,
+            help="Track camera look-ahead distance in metres",
+        )
+        command.add_argument(
+            "--smoothing",
+            type=float,
+            default=0.5,
+            help="Fixed replay-time camera smoothing window in seconds",
+        )
+        command.add_argument(
+            "--camera-script",
+            type=Path,
+            help="JSON world-space camera keyframes for cinematic mode",
+        )
     return cli
 
 
@@ -108,7 +131,15 @@ def main(argv=None):
             args.orbit,
             args.fov,
             args.segment,
+            pack_size=args.pack_size,
+            lookahead=args.lookahead,
+            smoothing=args.smoothing,
+            keyframes=load_camera_script(args.camera_script)
+            if args.camera_script
+            else (),
         )
+        if args.camera_script and camera.mode != "cinematic":
+            raise ValueError("--camera-script requires --camera cinematic")
         from .spectator_process import RemoteSpectator
         from .spectator_replay import ReplayComparison
 
@@ -157,6 +188,29 @@ def main(argv=None):
         cli.error(f"Malformed or incompatible comparison/checkpoint: {exc}")
     except (ValueError, RuntimeError, OSError, ImportError) as exc:
         cli.error(str(exc))
+
+
+def load_camera_script(path):
+    path = Path(path)
+    if path.stat().st_size > 256_000:
+        raise ValueError("Camera script exceeds 256 KB")
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or set(data) != {"keyframes"}:
+        raise ValueError("Camera script requires a single keyframes list")
+    if not isinstance(data["keyframes"], list) or not data["keyframes"]:
+        raise ValueError("Camera script requires nonempty keyframes")
+    return tuple(data["keyframes"])
+
+
+def save_camera_script(path, keyframes):
+    if not keyframes:
+        raise ValueError("Mark at least one displayed camera pose first")
+    data = CameraSettings(mode="cinematic", keyframes=keyframes).to_dict()["keyframes"]
+    serialized = json.dumps({"keyframes": data}, indent=2) + "\n"
+    if len(serialized.encode()) > 256_000:
+        raise ValueError("Camera script exceeds 256 KB")
+    with Path(path).open("x") as stream:
+        stream.write(serialized)
 
 
 if __name__ == "__main__":
