@@ -256,3 +256,31 @@ def test_bc_snapshot_label_leads_with_fitting_updates(tmp_path, monkeypatch):
     )
     assert result.ghosts[0]["key"] == "bc-s0-actions-0-updates-8000"
     assert result.ghosts[0]["label"] == "Behavior cloning · 8000 fitting updates"
+
+
+def test_capture_records_executed_clipped_controls_and_terminal_flags(
+    tmp_path, actors, monkeypatch
+):
+    def outside_controls(self, observations):
+        return torch.tensor([2.0, -2.0, 0.2, 0.3, -0.4]).repeat(len(observations), 1)
+
+    monkeypatch.setattr(Policy, "act", outside_controls)
+
+    class Clipping(FakeEnv):
+        def step(self, action):
+            assert action[0] > 1 and action[1] < -1
+            obs, reward, term, trunc, info = super().step(action)
+            info["executed_action"] = np.clip(action, -1, 1)
+            return obs, reward, term, trunc, info
+
+    monkeypatch.setattr(replay, "DrivingEnv", Clipping)
+    result = replay.capture_comparison(
+        tmp_path / "comparison", root=actors, methods=("bc",), max_steps=3
+    )
+    with np.load(result.path / "bc.npz") as data:
+        np.testing.assert_array_equal(data["executed_action"][0], np.zeros(5))
+        np.testing.assert_allclose(
+            data["executed_action"][1:], [[1, -1, 0.2, 0.3, -0.4]] * 3
+        )
+        np.testing.assert_array_equal(data["terminated"], [False, False, False, True])
+        assert not data["truncated"].any() and data["steer"][-1] == 1

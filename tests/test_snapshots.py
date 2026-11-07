@@ -180,3 +180,20 @@ def test_tiny_training_logging_preserves_weights_counters_and_rng(
             if algo == "dagger"
             else metadata["dagger_round"] is None
         )
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
+def test_mps_snapshot_preserves_device_rng_and_reloads_on_cpu(tmp_path):
+    actor = Policy(3, hidden=8).to("mps").train()
+    inputs = torch.ones(2, 3, device="mps")
+    expected = actor.act(inputs).detach().cpu()
+    before, device_before = rng_state(), torch.mps.get_rng_state().clone()
+    path = export_actor_snapshot(
+        tmp_path, actor, {"algo": "bc", "hidden": 8, "seed": 0}, 0, 2
+    )
+    assert_rng_equal(before, rng_state())
+    torch.testing.assert_close(device_before, torch.mps.get_rng_state(), rtol=0, atol=0)
+    assert actor.training and next(actor.parameters()).device.type == "mps"
+    loaded, _, _ = load_actor(path)
+    assert next(loaded.parameters()).device.type == "cpu" and not loaded.training
+    torch.testing.assert_close(loaded.act(inputs.cpu()), expected, atol=1e-6, rtol=1e-6)
