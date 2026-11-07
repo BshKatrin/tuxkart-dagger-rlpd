@@ -1,0 +1,137 @@
+// Presentation-only adapter against checksum-verified PySuperTuxKart2 0.7.4 headers.
+#include "modes/world.hpp"
+#include "karts/abstract_kart.hpp"
+#include "karts/kart_model.hpp"
+#include "karts/kart_properties.hpp"
+#include "karts/kart_properties_manager.hpp"
+#include "graphics/irr_driver.hpp"
+#include "graphics/render_target.hpp"
+#include "graphics/shader_based_renderer.hpp"
+#include "graphics/frame_buffer.hpp"
+#include "ge_render_info.hpp"
+#include "ISceneManager.h"
+#include "ICameraSceneNode.h"
+#include "quaternion.h"
+#include <memory>
+#include <stdexcept>
+#include <vector>
+#include <string>
+
+namespace {
+std::string error;
+struct Ghost {
+    std::unique_ptr<KartModel> model;
+    irr::scene::ISceneNode* node = nullptr;
+    ~Ghost() { if (node) node->remove(); }
+};
+struct Presentation {
+    std::vector<std::unique_ptr<Ghost>> ghosts;
+    irr::scene::ICameraSceneNode* camera = nullptr;
+    std::unique_ptr<RenderTarget> target;
+    int width, height;
+    ~Presentation() {
+        ghosts.clear();
+        target.reset();
+        if (camera) { camera->remove(); camera->drop(); }
+    }
+};
+template<class F> int checked(F f) {
+    try { error.clear(); f(); return 0; }
+    catch (const std::exception& e) { error = e.what(); return -1; }
+}
+}
+extern "C" {
+const char* kartstudy_spectator_error() { return error.c_str(); }
+int kartstudy_spectator_count() {
+    auto w = World::getWorld(); return w ? (int)w->getNumKarts() : -1;
+}
+int kartstudy_spectator_ticks() {
+    auto w = World::getWorld(); return w ? w->getTicksSinceStart() : -1;
+}
+void* kartstudy_spectator_create(int width, int height) {
+    Presentation* result = nullptr;
+    checked([&] {
+        auto w = World::getWorld();
+        if (!w || !irr_driver) throw std::runtime_error("No rendered native world");
+        if (!dynamic_cast<ShaderBasedRenderer*>(irr_driver->getRenderer()))
+            throw std::runtime_error("Spectator requires the native GL3 renderer");
+        auto p = std::make_unique<Presentation>();
+        p->width = width; p->height = height;
+        p->camera = irr_driver->getSceneManager()->addCameraSceneNode();
+        p->camera->grab();
+        p->camera->setNearValue(0.1f); p->camera->setFarValue(2000.f);
+        p->camera->setAspectRatio(float(width) / height);
+        p->target = irr_driver->createRenderTarget(
+            irr::core::dimension2du(width, height), "kartstudy-spectator");
+        if (!dynamic_cast<GL3RenderTarget*>(p->target.get()))
+            throw std::runtime_error("Native offscreen GL3 target unavailable");
+        // The single world kart is only the engine's loading anchor, never a ghost.
+        for (unsigned i = 0; i < w->getNumKarts(); ++i)
+            w->getKart(i)->getNode()->setVisible(false);
+        result = p.release();
+    });
+    return result;
+}
+int kartstudy_spectator_add(void* handle, const char* kart, float hue) {
+    return checked([&] {
+        auto& p = *static_cast<Presentation*>(handle);
+        auto properties = kart_properties_manager->getKart(kart);
+        if (!properties) throw std::runtime_error("Unknown native kart model");
+        kart_properties_manager->onDemandLoadKartTextures({kart}, false);
+        auto g = std::make_unique<Ghost>();
+        g->model.reset(properties->getKartModelCopy(
+            std::make_shared<GE::GERenderInfo>(hue, false)));
+        g->node = g->model->attachModel(true, false);
+        if (!g->node) throw std::runtime_error("Native kart model attachment failed");
+        g->model->update(0, 0, 0, 0, 0);
+        g->node->setVisible(false);
+        p.ghosts.push_back(std::move(g));
+    });
+}
+int kartstudy_spectator_camera(void* handle, const float* pos, const float* target, float fov) {
+    return checked([&] {
+        auto c = static_cast<Presentation*>(handle)->camera;
+        c->setPosition({pos[0], pos[1], pos[2]});
+        c->setTarget({target[0], target[1], target[2]});
+        c->setFOV(fov);
+        c->updateAbsolutePosition();
+    });
+}
+int kartstudy_spectator_pose(void* handle, int index, const float* pos,
+                            const float* xyzw, float speed, float steer, int visible) {
+    return checked([&] {
+        auto& g = *static_cast<Presentation*>(handle)->ghosts.at(index);
+        irr::core::quaternion q(xyzw[0], xyzw[1], xyzw[2], xyzw[3]);
+        irr::core::vector3df angles; q.toEuler(angles);
+        g.node->setPosition({pos[0], pos[1], pos[2]});
+        g.node->setRotation(angles * irr::core::RADTODEG);
+        g.model->update(0, 0, steer, speed, 0);
+        g.node->setVisible(visible != 0);
+        g.node->updateAbsolutePosition();
+    });
+}
+int kartstudy_spectator_render(void* handle, unsigned char* rgb) {
+    return checked([&] {
+        auto& p = *static_cast<Presentation*>(handle);
+        auto renderer = dynamic_cast<ShaderBasedRenderer*>(irr_driver->getRenderer());
+        auto saved = renderer->getRTTs();
+        auto scene = irr_driver->getSceneManager();
+        auto active = scene->getActiveCamera();
+        p.target->renderToTexture(p.camera, 0);
+        auto fb = static_cast<GL3RenderTarget*>(p.target.get())->getFrameBuffer();
+        if (!fb || fb->getWidth() != (unsigned)p.width || fb->getHeight() != (unsigned)p.height)
+            throw std::runtime_error("Native target size mismatch");
+        GLint pack; glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        fb->bind(); glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(0, 0, p.width, p.height, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+        auto gl_error = glGetError();
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        glBindFramebuffer(GL_FRAMEBUFFER, irr_driver->getDefaultFramebuffer());
+        renderer->setRTT(saved); scene->setActiveCamera(active);
+        if (gl_error != GL_NO_ERROR) throw std::runtime_error("Native framebuffer read failed");
+    });
+}
+void kartstudy_spectator_destroy(void* handle) { delete static_cast<Presentation*>(handle); }
+}
