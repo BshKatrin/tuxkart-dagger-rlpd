@@ -38,7 +38,7 @@ def _scalar(value, name):
         number = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be finite") from exc
-    if not math.isfinite(number):
+    if not math.isfinite(number) or abs(number) > np.finfo(np.float32).max:
         raise ValueError(f"{name} must be finite")
     return number
 
@@ -124,6 +124,7 @@ class NativeSpectator:
             self._race.start()
             self._before = self._native.kartstudy_spectator_count()
             self._start_ticks = self._native.kartstudy_spectator_ticks()
+            self._start_time = self._native.kartstudy_spectator_time()
             self._handle = self._native.kartstudy_spectator_create(width, height)
             if not self._handle:
                 raise RuntimeError(self._native.kartstudy_spectator_error().decode())
@@ -167,7 +168,10 @@ class NativeSpectator:
     def _assert_world(self):
         if self._native.kartstudy_spectator_count() != self._before:
             raise RuntimeError("Physical kart count changed during presentation")
-        if self._native.kartstudy_spectator_ticks() != self._start_ticks:
+        if (
+            self._native.kartstudy_spectator_ticks() != self._start_ticks
+            or self._native.kartstudy_spectator_time() != self._start_time
+        ):
             raise RuntimeError("Simulation clock advanced during presentation")
 
     def set_camera(self, camera: CameraPose):
@@ -272,6 +276,24 @@ class NativeSpectator:
 
     def diagnostics(self):
         self._ensure_open()
+        camera = np.empty(7, dtype=np.float32)
+        self._check(
+            self._native.kartstudy_spectator_camera_state(
+                self._handle, _float_pointer(camera)
+            )
+        )
+        ghosts = {}
+        for key, index in self._indices.items():
+            state = np.empty(6, dtype=np.float32)
+            self._check(
+                self._native.kartstudy_spectator_ghost_state(
+                    self._handle, index, _float_pointer(state)
+                )
+            )
+            ghosts[key] = {
+                "position": state[:3].tolist(),
+                "forward": state[3:].tolist(),
+            }
         return {
             **self._fingerprint,
             "track": self.track,
@@ -281,9 +303,16 @@ class NativeSpectator:
             "simulation_ticks_before": self._start_ticks,
             "simulation_ticks_after": self._native.kartstudy_spectator_ticks(),
             "ghost_count": len(self._configs),
+            "ghost_transforms": ghosts,
+            "race_time_before": self._start_time,
+            "race_time_after": self._native.kartstudy_spectator_time(),
             "visible_ghosts": list(self._visible),
             "render_count": self._renders,
-            "camera": self._camera,
+            "camera": {
+                "position": camera[:3].tolist(),
+                "target": camera[3:6].tolist(),
+                "fov": float(camera[6]),
+            },
             "renderer": "native GL3 offscreen",
             "ghost_physics_bodies": 0,
         }
@@ -300,6 +329,7 @@ class NativeSpectator:
             self._race.stop()
             self._race = None
         if self._initialized:
+            self._native.kartstudy_spectator_release_players()
             pystk2.clean()
             self._initialized = False
         self._closed = True
