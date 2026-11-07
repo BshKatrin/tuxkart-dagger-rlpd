@@ -74,13 +74,13 @@ def test_selected_policies_hide_extra_runs_without_removing_checkpoints(tmp_path
             )
         )
         (run / "status.json").write_text(json.dumps({"status": "completed"}))
-        (run / "checkpoint.pt").touch()
+        (run / "actor.pt").touch()
     (tmp_path / "selected-policies.json").write_text(
         json.dumps({"dagger": "shared_dagger_s0"})
     )
     catalog = discover_runs(tmp_path)
     assert {key[2] for key in catalog} == {0}
-    assert (tmp_path / "shared_dagger_s1" / "checkpoint.pt").exists()
+    assert (tmp_path / "shared_dagger_s1" / "actor.pt").exists()
 
 
 def test_remote_timeout_is_bounded_and_closes_stalled_worker():

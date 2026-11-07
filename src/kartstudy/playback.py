@@ -35,7 +35,9 @@ def discover_runs(root):
         if selected is not None and selected.get(config["algo"]) != path.parent.name:
             continue
         status_path = path.parent / "status.json"
-        if not status_path.exists() or not (path.parent / "checkpoint.pt").exists():
+        if not status_path.exists() or not any(
+            (path.parent / name).exists() for name in ("actor.pt", "checkpoint.pt")
+        ):
             continue
         if json.loads(status_path.read_text()).get("status") != "completed":
             continue
