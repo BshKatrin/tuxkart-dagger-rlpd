@@ -20,7 +20,23 @@ from kartstudy.evaluation import summarize_runs
 from kartstudy.train import defaults, write_json
 
 
-def experiment_specs(dataset=None):
+def experiment_specs(
+    dataset=None, methods=("bc", "dagger", "sac", "rlpd"), seeds=range(5)
+):
+    if (
+        not methods
+        or len(set(methods)) != len(methods)
+        or any(
+            method not in ("bc", "dagger", "sac", "sac_sym", "rlpd")
+            for method in methods
+        )
+    ):
+        raise ValueError("Select unique supported methods")
+    if not seeds or len(set(seeds)) != len(seeds) or any(
+        isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32
+        for seed in seeds
+    ):
+        raise ValueError("Select unique 32-bit nonnegative training seeds")
     return [
         (
             f"shared_{algo}_s{seed}",
@@ -28,8 +44,8 @@ def experiment_specs(dataset=None):
             | {"algo": algo, "seed": seed, "utd": 4 if algo == "rlpd" else 1}
             | ({"dataset": dataset} if dataset else {}),
         )
-        for seed in range(5)
-        for algo in ("bc", "dagger", "sac", "rlpd")
+        for seed in seeds
+        for algo in methods
     ]
 
 
@@ -39,12 +55,19 @@ def main():
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--dataset", default=defaults()["dataset"])
     parser.add_argument(
+        "--methods",
+        nargs="+",
+        choices=("bc", "dagger", "sac", "sac_sym", "rlpd"),
+        default=["bc", "dagger", "sac", "rlpd"],
+    )
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(range(5)))
+    parser.add_argument(
         "--qualification", default="runs/qualification-polar-four/metrics.json"
     )
     args = parser.parse_args()
     if not 1 <= args.workers <= 4:
         parser.error("Use 1–4 workers")
-    specs = experiment_specs(args.dataset)
+    specs = experiment_specs(args.dataset, args.methods, args.seeds)
     validate_dataset(
         args.dataset,
         specs[0][1]["tracks"],
@@ -72,6 +95,8 @@ def main():
         raise ValueError("Expert qualification failed or uses different source/tracks")
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=False)
+    runtime = root.resolve() / "runtime"
+    runtime.mkdir(mode=0o700)
     shutil.copyfile(args.qualification, root / "qualification.json")
     lock = root / "suite.lock"
     descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -196,6 +221,8 @@ def main():
                             "OPENBLAS_NUM_THREADS": "1",
                             "VECLIB_MAXIMUM_THREADS": "1",
                             "PYTHONUNBUFFERED": "1",
+                            # Optional Discord RPC accesses graphical models in headless races.
+                            "XDG_RUNTIME_DIR": str(runtime),
                         },
                     )
                     active[job["name"]] = (process, log)
