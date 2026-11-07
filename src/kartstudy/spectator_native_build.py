@@ -120,6 +120,7 @@ def load_adapter():
         ],
         "render": [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte)],
         "ghost_state": [ctypes.c_void_p, ctypes.c_int, float_p],
+        "ghost_bounds": [ctypes.c_void_p, ctypes.c_int, float_p],
         "camera_state": [ctypes.c_void_p, float_p],
         "destroy": [ctypes.c_void_p],
         "test_fail_next_render": [ctypes.c_void_p],
