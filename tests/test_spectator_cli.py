@@ -324,3 +324,51 @@ def test_export_rejects_stale_loaded_manifest(comparison, tmp_path):
     with pytest.raises(RuntimeError, match="changed before rendering"):
         export(renderer, comparison, output)
     assert not output.exists() and not output.with_suffix(".json").exists()
+
+
+@pytest.mark.parametrize(
+    "start,end,preview", [(0.1, 0.15, True), (0, 0.15, True), (0, 0.2, False)]
+)
+def test_export_frames_visibly_label_partial_range_and_retain_seeds(
+    comparison, tmp_path, monkeypatch, start, end, preview
+):
+    from PIL import ImageDraw
+
+    drawn = []
+    original = ImageDraw.ImageDraw.text
+
+    def text(self, xy, value, *args, **kwargs):
+        drawn.append((value, self.textbbox(xy, value, font=kwargs["font"])))
+        return original(self, xy, value, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", text)
+
+    def writer(*args, **kwargs):
+        while True:
+            yield
+
+    result = export(
+        FixtureRenderer(comparison.path),
+        comparison,
+        tmp_path / "clip.mp4",
+        start=start,
+        end=end,
+        writer_factory=writer,
+    )
+    labels = [bounds for value, bounds in drawn if value.startswith("PARTIAL PREVIEW")]
+    assert len(labels) == (result["frame_count"] if preview else 0)
+    if preview:
+        expected = f"PARTIAL PREVIEW · clip {start:.2f}–{end:.2f} s of 0.20 s"
+        assert sum(value == expected for value, _ in drawn) == result["frame_count"]
+    seed_labels = [
+        bounds
+        for value, bounds in drawn
+        if value.startswith("Training seed 0 · eval seed 20000")
+    ]
+    assert len(seed_labels) == result["frame_count"]
+    assert all(
+        0 <= left < right <= 640 and 0 <= top < bottom <= 360
+        for left, top, right, bottom in labels + seed_labels
+    )
+    assert result["preview_only"] is preview
+    assert result["start_seconds"] == start and result["end_seconds"] == end

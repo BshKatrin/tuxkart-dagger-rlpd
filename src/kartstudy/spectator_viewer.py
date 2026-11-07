@@ -137,7 +137,8 @@ def annotated_frame(frame, metadata, ghosts, geometry, track):
     scale = max(1, image.width / 960)
     font = ImageFont.load_default(size=round(14 * scale))
     line = round(20 * scale)
-    strip = (len(ghosts) + 2) * line + 12
+    preview = bool(metadata.get("preview_only", False))
+    strip = (len(ghosts) + 2 + int(preview)) * line + 12
     draw.rectangle((0, image.height - strip, image.width, image.height), fill="#101820")
     y = image.height - strip + 5
     draw.text(
@@ -146,6 +147,14 @@ def annotated_frame(frame, metadata, ghosts, geometry, track):
         font=font,
         fill="white",
     )
+    if preview:
+        y += line
+        draw.text(
+            (10, y),
+            f"PARTIAL PREVIEW · clip {metadata['start_seconds']:.2f}–{metadata['end_seconds']:.2f} s of {metadata['replay_duration_seconds']:.2f} s",
+            font=font,
+            fill="#ffc766",
+        )
     states = {pose["key"]: pose for pose in metadata["poses"]}
     for ghost in ghosts:
         y += line

@@ -74,6 +74,12 @@ def export(
     if output.exists() or sidecar.exists():
         raise FileExistsError(f"Refusing to overwrite MP4 or sidecar: {output}")
     times = frame_times(comparison.duration, fps, start, end)
+    clip = {
+        "preview_only": times[0] != 0 or times[-1] != comparison.duration,
+        "start_seconds": times[0],
+        "end_seconds": times[-1],
+        "replay_duration_seconds": comparison.duration,
+    }
     camera = camera or CameraSettings()
     visible = list(
         visible if visible is not None else [g["key"] for g in comparison.ghosts]
@@ -119,7 +125,7 @@ def export(
                 np.asarray(
                     annotated_frame(
                         state["frame"],
-                        presentation_metadata(comparison, state),
+                        presentation_metadata(comparison, state) | clip,
                         comparison.ghosts,
                         renderer.metadata["geometry"],
                         comparison.track,
@@ -151,10 +157,7 @@ def export(
             "fps": fps,
             "frame_count": len(times),
             "video_duration_seconds": len(times) / fps,
-            "replay_duration_seconds": comparison.duration,
-            "start_seconds": times[0],
-            "end_seconds": times[-1],
-            "preview_only": start != 0 or times[-1] != comparison.duration,
+            **clip,
             "sampling": "uniform presentation intervals plus exact terminal endpoint",
             "terminal_hold_seconds": len(times) / fps - (times[-1] - times[0]),
             "camera": camera.to_dict(),
