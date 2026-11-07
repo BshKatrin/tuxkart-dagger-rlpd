@@ -99,7 +99,36 @@ def test_remote_timeout_is_bounded_and_closes_stalled_worker():
     assert closed == [True]
 
 
-def test_viewer_steps_do_not_toggle_controls_or_status(monkeypatch):
+def test_viewer_steps_do_not_toggle_controls_or_status():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    # Native simulator tests initialize SDL/Cocoa; Tk needs a fresh process.
+    probe = f"""
+import runpy
+import sys
+import pytest
+namespace = runpy.run_path({str(Path(__file__).resolve())!r})
+try:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        namespace['_assert_viewer_controls'](monkeypatch)
+except pytest.skip.Exception:
+    sys.exit(77)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode == 77:
+        pytest.skip("Tk display unavailable")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _assert_viewer_controls(monkeypatch):
     from types import SimpleNamespace
 
     tk = pytest.importorskip("tkinter")
