@@ -218,5 +218,30 @@ class DrivingEnv:
             self._expert_action = normalize_action(self.expert.act(self.raw))
         return encode(self.raw), float(reward), bool(terminated), bool(truncated), info
 
+    def replay_pose(self):
+        """Read world pose only; pinned native rotation is inverse wxyz."""
+        from importlib.metadata import version
+
+        if version("pysupertuxkart2") != "0.7.4":
+            raise RuntimeError("Replay orientation requires PySuperTuxKart2 0.7.4")
+        world = self.env.unwrapped.world
+        kart = world.karts[0]
+        if not hasattr(kart, "rotation"):
+            raise ValueError(
+                "Native replay requires orientation; positions alone are insufficient"
+            )
+        q = np.asarray(kart.rotation, dtype=float)
+        if q.shape != (4,) or not np.isfinite(q).all() or np.linalg.norm(q) == 0:
+            raise ValueError("Invalid native orientation")
+        # pystk_cpp/state.cpp setVector stores wxyz of getRotation().inverse().
+        rotation = np.array([-q[1], -q[2], -q[3], q[0]]) / np.linalg.norm(q)
+        return {
+            "position": list(kart.location),
+            "rotation": rotation.tolist(),
+            "kart": str(kart.kart_type),
+            "native_time": float(world.time),
+            "speed": float(np.linalg.norm(self.raw["velocity"])),
+        }
+
     def close(self):
         self.env.close()

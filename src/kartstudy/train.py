@@ -22,6 +22,7 @@ from .algorithms import SAC, Policy, fit_imitation, symmetric_sample
 from .data import dataset_hash, load_transitions, training_mask, validate_dataset
 from .environment import ACTION_DIM, SCHEMA_VERSION, DrivingEnv
 from .evaluation import evaluate
+from .snapshots import export_actor_snapshot
 from .tracks import HELD_OUT_TRACKS, TRAIN_TRACKS, track_group
 
 
@@ -107,6 +108,7 @@ def run(config, out):
     env = DrivingEnv(track=tracks[0], max_steps=config["max_steps"])
     track_steps = dict.fromkeys(tracks, 0)
     steps = updates = expert_queries = eval_steps = episodes = 0
+    round_index = 0
     algo = config["algo"]
     if algo not in ["bc", "dagger", "sac", "rlpd"]:
         raise ValueError(f"Unknown algorithm: {algo}")
@@ -136,7 +138,18 @@ def run(config, out):
         },
     )
 
+    def snapshot():
+        export_actor_snapshot(
+            out,
+            actor,
+            config,
+            steps,
+            updates,
+            dagger_round=round_index if algo == "dagger" else None,
+        )
+
     def save_state(status):
+        snapshot()
         state = {
             "config": config,
             "track_steps": track_steps,
@@ -177,6 +190,7 @@ def run(config, out):
 
     def assessment(final=False):
         nonlocal eval_steps
+        snapshot()
         # Use CPU inference snapshot; all optimizer updates remain on requested device.
         policy = copy.deepcopy(actor).to("cpu").eval()
         rng_py, rng_np, rng_torch = (
@@ -279,7 +293,6 @@ def run(config, out):
 
         obs = reset_training()
         next_eval = config["eval_every"]
-        round_index = 0
         rng = np.random.default_rng(config["seed"])
         while steps < config["steps"] and not stop:
             rollout = copy.deepcopy(actor).to("cpu").eval()
