@@ -59,7 +59,7 @@ class FakeEnv:
             "position": [self.n, 2, 3],
             "rotation": [0, 0, 0, 1],
             "kart": "tux",
-            "native_time": [-1, -1, 0, 0.1][self.n],
+            "native_time": self.n * 0.1,
             "speed": self.n,
         }
 
@@ -114,7 +114,7 @@ def test_capture_initial_terminal_failed_laps_and_freezing(
         )
         np.testing.assert_array_equal(arrays["terminated"], [False, False, False, True])
         assert not arrays["truncated"].any()
-        np.testing.assert_array_equal(arrays["native_time"], [-1, -1, 0, 0.1])
+        np.testing.assert_array_equal(arrays["native_time"], np.arange(4) * 0.1)
     with pytest.raises(FileExistsError):
         replay.capture_comparison(result.path, root=actors)
 
@@ -234,6 +234,7 @@ def test_unflagged_teleport_also_disables_interpolation():
         {
             "native_time": 0,
             "time": 0,
+            "action_time": 0,
             "position": [0, 0, 0],
             "speed": 1,
             "rescue_active": False,
@@ -284,3 +285,116 @@ def test_capture_records_executed_clipped_controls_and_terminal_flags(
         )
         np.testing.assert_array_equal(data["terminated"], [False, False, False, True])
         assert not data["truncated"].any() and data["steer"][-1] == 1
+
+
+def test_countdown_keeps_controls_but_never_advances_race_clock(
+    tmp_path, actors, monkeypatch
+):
+    class Countdown(FakeEnv):
+        def replay_pose(self):
+            return super().replay_pose() | {
+                "native_time": 0.0
+                if self.n <= 19
+                else 0.075
+                if self.n == 20
+                else 0.175,
+                "position": [self.n / 10, 2, 3],
+            }
+
+        def step(self, action):
+            self.n += 1
+            return (
+                np.zeros(3, np.float32),
+                0,
+                self.n == 22,
+                False,
+                {
+                    "success": self.n == 22,
+                    "finish_time": 0.165,
+                    "executed_action": np.array([self.n / 100, 0.5, -1, 1, -1]),
+                },
+            )
+
+    monkeypatch.setattr(replay, "DrivingEnv", Countdown)
+    result = replay.capture_comparison(
+        tmp_path / "comparison", root=actors, methods=("bc",), max_steps=22
+    )
+    assert result.manifest["format_version"] == 2
+    assert result.duration == pytest.approx(0.175)
+    assert result.manifest["laps"]["bc"]["lap_time"] == 0.165
+    with np.load(result.path / "bc.npz") as data:
+        assert (
+            len(data["time"]) == 23
+        )  # Initial plus every control step, including countdown.
+        np.testing.assert_array_equal(data["time"], data["native_time"])
+        np.testing.assert_array_equal(data["time"][:20], np.zeros(20))
+        np.testing.assert_allclose(data["time"][20:], [0.075, 0.175, 0.175])
+        np.testing.assert_allclose(data["action_time"], np.arange(23) * 0.1)
+        np.testing.assert_allclose(
+            data["executed_action"][1:, 0], np.arange(1, 23) / 100
+        )
+        assert data["terminated"][-1] and not data["terminated"][:-1].any()
+        np.testing.assert_allclose(data["position"][[0, -1], 0], [0, 2.2])
+    np.testing.assert_allclose(result._traces["bc"]["time"], [0, 0.075, 0.175])
+    assert result.sample(0)[0]["position"] == [0, 2, 3]
+    assert result.sample(0.0375)[0]["position"][0] == pytest.approx(1.0)
+    assert result.sample(0.125)[0]["position"][0] == pytest.approx(2.1)
+    assert result.sample(0.175)[0]["position"][0] == pytest.approx(2.2)
+    assert result.sample(1)[0]["status"] == "finished"
+
+
+def test_failure_during_countdown_keeps_initial_and_final_pose(
+    tmp_path, actors, monkeypatch
+):
+    class FailedCountdown(FakeEnv):
+        def replay_pose(self):
+            return super().replay_pose() | {"native_time": 0.0}
+
+        def step(self, action):
+            self.n += 1
+            if self.n == 2:
+                raise RuntimeError("countdown fixture failure")
+            return np.zeros(3, np.float32), 0, False, False, {"executed_action": action}
+
+    monkeypatch.setattr(replay, "DrivingEnv", FailedCountdown)
+    result = replay.capture_comparison(
+        tmp_path / "comparison", root=actors, methods=("bc",), max_steps=3
+    )
+    assert result.duration == 0
+    assert result.sample(0)[0]["position"] == [0, 2, 3]
+    assert result.sample(0.001)[0]["position"] == [2, 2, 3]
+    assert result.sample(0.001)[0]["status"] == "stopped"
+    with np.load(result.path / "bc.npz") as data:
+        np.testing.assert_array_equal(data["time"], [0, 0, 0])
+        np.testing.assert_allclose(data["action_time"], [0, 0.1, 0.1])
+        np.testing.assert_array_equal(data["action_applied"], [False, True, False])
+        assert not data["terminated"].any() and not data["truncated"].any()
+
+
+def test_duplicate_positive_times_keep_last_pose_and_rescue_boundary(
+    tmp_path, actors, monkeypatch
+):
+    class Duplicate(FakeEnv):
+        def replay_pose(self):
+            return super().replay_pose() | {"native_time": [0, 0.1, 0.1, 0.2][self.n]}
+
+        def step(self, action):
+            obs, reward, term, trunc, info = super().step(action)
+            info["rescue_active"] = self.n == 1
+            return obs, reward, term, trunc, info
+
+    monkeypatch.setattr(replay, "DrivingEnv", Duplicate)
+    result = replay.capture_comparison(
+        tmp_path / "comparison", root=actors, methods=("bc",), max_steps=3
+    )
+    assert len(result._measurements["bc"]["time"]) == 4
+    np.testing.assert_allclose(result._traces["bc"]["time"], [0, 0.1, 0.2])
+    assert result.sample(0.05)[0]["position"] == [0, 2, 3]
+    assert result.sample(0.1)[0]["position"] == [2, 2, 3]
+    assert result.sample(0.15)[0]["position"][0] == pytest.approx(2.5)
+
+
+def test_backward_native_clock_is_rejected():
+    rows = [{"native_time": 0.2, "action_time": 0.1}]
+    with pytest.raises(ValueError, match="nondecreasing"):
+        replay._append_pose(rows, {"native_time": 0.1}, 0, False)

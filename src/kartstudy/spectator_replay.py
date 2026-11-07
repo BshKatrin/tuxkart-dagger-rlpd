@@ -14,7 +14,7 @@ from .playback import METHODS, discover_runs, load_actor
 from .snapshots import actor_hash, file_hash, source_identity
 from .spectator_contract import GhostConfig, GhostPose
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 COLORS = {"bc": 0.08, "dagger": 0.56, "sac": 0.0, "rlpd": 0.33}
 
 
@@ -36,7 +36,10 @@ def _append_pose(
     truncated=False,
 ):
     previous = rows[-1]
-    delta = pose["native_time"] - previous["native_time"]
+    native_time = float(pose["native_time"])
+    if not np.isfinite(native_time) or native_time < previous["native_time"]:
+        raise ValueError("Native race timestamps must be finite and nondecreasing")
+    delta = native_time - previous["native_time"]
     interval = delta if delta > 0 else 0.1
     displacement = np.linalg.norm(np.asarray(pose["position"]) - previous["position"])
     # Rescue timers cover animations; the distance guard catches instantaneous relocation.
@@ -49,7 +52,9 @@ def _append_pose(
     rows.append(
         pose
         | {
-            "time": previous["time"] + interval,
+            "time": max(0.0, native_time),
+            "action_time": previous["action_time"]
+            + (0.1 if executed_action is not None else 0.0),
             "steer": float(steer),
             "rescue_active": bool(rescue_active),
             "discontinuity": discontinuity,
@@ -61,6 +66,21 @@ def _append_pose(
             "truncated": bool(truncated),
         }
     )
+
+
+def _render_trace(measurements):
+    """Collapse only render poses, preserving full control telemetry on disk."""
+    times = measurements["time"]
+    # Last measurement at each positive timestamp preserves terminal/failure poses.
+    last = np.flatnonzero(np.r_[times[1:] != times[:-1], True])
+    indices = np.r_[0, last[times[last] > 0]]
+    trace = {name: values[indices].copy() for name, values in measurements.items()}
+    for destination in range(1, len(indices)):
+        start, end = indices[destination - 1] + 1, indices[destination] + 1
+        trace["discontinuity"][destination] = bool(
+            measurements["discontinuity"][start:end].any()
+        )
+    return trace
 
 
 def slerp(a, b, fraction):
@@ -93,6 +113,7 @@ class ReplayComparison:
         self.seed = int(self.manifest["evaluation_seed"])
         self.ghosts: list[GhostConfig] = self.manifest["ghosts"]
         self._traces = {}
+        self._measurements = {}
         for ghost in self.ghosts:
             record = self.manifest["laps"][ghost["key"]]
             file = self.path / record["file"]
@@ -107,6 +128,8 @@ class ReplayComparison:
                     name: archive[name]
                     for name in (
                         "time",
+                        "native_time",
+                        "action_time",
                         "position",
                         "rotation",
                         "speed",
@@ -124,10 +147,23 @@ class ReplayComparison:
                 n < 1
                 or trace["time"].shape != (n,)
                 or trace["time"][0] != 0
-                or not np.all(np.diff(trace["time"]) > 0)
+                or not np.all(np.diff(trace["time"]) >= 0)
             ):
                 raise ValueError(
-                    "Replay times must start at zero and strictly increase"
+                    "Recorded race times must start at zero and be nondecreasing"
+                )
+            for name in ("native_time", "action_time"):
+                if (
+                    trace[name].shape != (n,)
+                    or not np.isfinite(trace[name]).all()
+                    or np.any(np.diff(trace[name]) < 0)
+                ):
+                    raise ValueError(f"Invalid replay {name}")
+            if trace["action_time"][0] != 0 or not np.array_equal(
+                trace["time"], np.maximum(trace["native_time"], 0)
+            ):
+                raise ValueError(
+                    "Replay time must follow native race time; action time starts at zero"
                 )
             for name, shape in (
                 ("position", (n, 3)),
@@ -155,7 +191,8 @@ class ReplayComparison:
                 or not np.isfinite(trace["executed_action"]).all()
             ):
                 raise ValueError("Invalid replay executed controls")
-            self._traces[ghost["key"]] = trace
+            self._measurements[ghost["key"]] = trace
+            self._traces[ghost["key"]] = _render_trace(trace)
         self.duration = max(
             (float(t["time"][-1]) for t in self._traces.values()), default=0.0
         )
@@ -167,6 +204,14 @@ class ReplayComparison:
         for ghost in self.ghosts:
             trace = self._traces[ghost["key"]]
             times = trace["time"]
+            # A lap stopped during countdown has zero race duration. Show its
+            # initial pose at zero and freeze its final available pose afterward.
+            if times[-1] == 0 and time > 0:
+                trace = {
+                    name: values[-1:]
+                    for name, values in self._measurements[ghost["key"]].items()
+                }
+                times = trace["time"]
             t = np.clip(time, 0, times[-1])
             right = min(int(np.searchsorted(times, t, side="right")), len(times) - 1)
             left = max(0, right - 1)
@@ -195,7 +240,7 @@ class ReplayComparison:
                     "steer": float(mix("steer")),
                     "visible": True,
                     "status": self.manifest["laps"][ghost["key"]]["status"]
-                    if time >= times[-1]
+                    if time >= times[-1] and (times[-1] > 0 or time > 0)
                     else "driving",
                 }
             )
@@ -276,7 +321,8 @@ def capture_comparison(
         "quaternion_order": "xyzw",
         "world_axes": {"x": "right", "y": "up", "z": "forward"},
         "orientation_source": "pysupertuxkart2 0.7.4 inverse wxyz conjugated to world xyzw",
-        "time_policy": "native positive deltas; countdown/duplicate times advance by control interval",
+        "time_policy": "time=max(native_time, 0); countdown never advances race time; action_time counts completed 0.1-second control steps",
+        "render_duplicates": "keep the initial zero-time pose; keep the last pose at each positive race timestamp; carry discontinuities across dropped measurements",
         "control_interval_seconds": 0.1,
         "action_keys": list(ACTION_KEYS),
         "disabled_controls": {"drift": 0, "rescue": 0},
@@ -356,11 +402,19 @@ def capture_comparison(
             try:
                 obs, reset_info = env.reset(seed=int(eval_seed), track=track)
                 initial = env.replay_pose()
+                if (
+                    not np.isfinite(initial["native_time"])
+                    or initial["native_time"] > 0
+                ):
+                    raise ValueError(
+                        "Initial native race time must be finite and at or before zero"
+                    )
                 ghost["kart"] = initial["kart"]
                 rows.append(
                     initial
                     | {
                         "time": 0.0,
+                        "action_time": 0.0,
                         "steer": 0.0,
                         "rescue_active": bool(reset_info.get("rescue_active", False)),
                         "discontinuity": False,
@@ -450,6 +504,7 @@ def capture_comparison(
                             for name in (
                                 "time",
                                 "native_time",
+                                "action_time",
                                 "position",
                                 "rotation",
                                 "speed",
