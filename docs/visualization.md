@@ -153,7 +153,12 @@ The capture interval is 0.1 seconds. Interpolated presentation frames add visual
 smoothness without adding measurements. Quaternions follow the shortest rotation
 path; rescue discontinuities hold the preceding pose until the next measurement.
 Native orientation conversion is checked against identity and known engine turns.
-Race countdowns or repeated native times use the documented control interval.
+Replay time follows the native race clock. Countdown actions and all duplicate
+measurements remain on disk with a separate `action_time` clock. Rendering keeps
+the initial zero-time pose and the final pose at each positive timestamp; a
+zero-duration stopped lap displays its terminal pose/status. Format-1 native
+recordings load read-only using their stored native timestamps. Position-only
+analysis trajectories cannot supply native orientations.
 The exact terminal endpoint is included in export, adding at most two frames of
 terminal hold due to rounding to the requested frame rate.
 
