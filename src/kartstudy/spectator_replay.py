@@ -15,6 +15,7 @@ from .snapshots import actor_hash, file_hash, source_identity
 from .spectator_contract import GhostConfig, GhostPose
 
 FORMAT_VERSION = 2
+TIME_POLICY = "time=max(native_time, 0); countdown never advances race time; action_time counts completed 0.1-second control steps"
 COLORS = {"bc": 0.08, "dagger": 0.56, "sac": 0.0, "rlpd": 0.33}
 
 
@@ -105,8 +106,17 @@ class ReplayComparison:
     def __init__(self, path):
         self.path = Path(path)
         self.manifest = json.loads((self.path / "manifest.json").read_text())
-        if self.manifest.get("format_version") != FORMAT_VERSION:
+        source_version = self.manifest.get("format_version")
+        if source_version not in (1, FORMAT_VERSION):
             raise ValueError("Unsupported replay format")
+        if source_version == 1:
+            self.manifest["recorded_time_policy"] = self.manifest.get("time_policy")
+            self.manifest["time_policy"] = (
+                "time=max(native_time, 0); countdown never advances race time; action_time derived read-only (see per-lap action_time_basis)"
+            )
+            self.manifest["clock_conversion"] = (
+                "v1 native_time used as race clock; action clock derived in memory; source files unchanged"
+            )
         if self.manifest.get("quaternion_order") != "xyzw":
             raise ValueError("Replay requires canonical xyzw orientation")
         self.track = self.manifest["track"]
@@ -124,24 +134,45 @@ class ReplayComparison:
                     raise ValueError(
                         "Replay requires orientation; positions alone are insufficient"
                     )
-                trace = {
-                    name: archive[name]
-                    for name in (
-                        "time",
-                        "native_time",
-                        "action_time",
-                        "position",
-                        "rotation",
-                        "speed",
-                        "steer",
-                        "rescue_active",
-                        "discontinuity",
-                        "executed_action",
-                        "action_applied",
-                        "terminated",
-                        "truncated",
-                    )
+                names = (
+                    "time",
+                    "native_time",
+                    "action_time",
+                    "position",
+                    "rotation",
+                    "speed",
+                    "steer",
+                    "rescue_active",
+                    "discontinuity",
+                    "executed_action",
+                    "action_applied",
+                    "terminated",
+                    "truncated",
+                )
+                optional_v1 = {
+                    "action_time",
+                    "executed_action",
+                    "action_applied",
+                    "terminated",
+                    "truncated",
                 }
+                missing = set(names) - set(archive.files)
+                if missing - (optional_v1 if source_version == 1 else set()):
+                    raise ValueError("Replay is missing required measurements")
+                trace = {name: archive[name] for name in names if name in archive}
+            if source_version == 1:
+                trace["recorded_time"] = trace["time"]
+                trace["time"] = np.maximum(trace["native_time"], 0)
+                # Preserve unavailable legacy controls as unavailable rather than inventing them.
+                if "action_applied" in trace:
+                    trace["action_time"] = np.cumsum(trace["action_applied"]) * 0.1
+                    basis = (
+                        "recorded action_applied at 0.1 seconds per completed control"
+                    )
+                else:
+                    trace["action_time"] = np.arange(len(trace["time"])) * 0.1
+                    basis = "measurement intervals at 0.1 seconds; legacy controls unavailable"
+                record["action_time_basis"] = basis
             n = len(trace["time"])
             if (
                 n < 1
@@ -184,9 +215,11 @@ class ReplayComparison:
                 "terminated",
                 "truncated",
             ):
-                if trace[name].shape != (n,) or trace[name].dtype != np.bool_:
+                if name in trace and (
+                    trace[name].shape != (n,) or trace[name].dtype != np.bool_
+                ):
                     raise ValueError(f"Invalid replay {name}")
-            if (
+            if "executed_action" in trace and (
                 trace["executed_action"].shape != (n, len(ACTION_KEYS))
                 or not np.isfinite(trace["executed_action"]).all()
             ):
@@ -204,9 +237,9 @@ class ReplayComparison:
         for ghost in self.ghosts:
             trace = self._traces[ghost["key"]]
             times = trace["time"]
-            # A lap stopped during countdown has zero race duration. Show its
-            # initial pose at zero and freeze its final available pose afterward.
-            if times[-1] == 0 and time > 0:
+            # Zero-duration laps must expose the terminal endpoint at the only
+            # reachable playback time. The initial measurement remains on disk.
+            if times[-1] == 0 and time >= 0:
                 trace = {
                     name: values[-1:]
                     for name, values in self._measurements[ghost["key"]].items()
@@ -240,7 +273,7 @@ class ReplayComparison:
                     "steer": float(mix("steer")),
                     "visible": True,
                     "status": self.manifest["laps"][ghost["key"]]["status"]
-                    if time >= times[-1] and (times[-1] > 0 or time > 0)
+                    if time >= times[-1]
                     else "driving",
                 }
             )
@@ -321,7 +354,7 @@ def capture_comparison(
         "quaternion_order": "xyzw",
         "world_axes": {"x": "right", "y": "up", "z": "forward"},
         "orientation_source": "pysupertuxkart2 0.7.4 inverse wxyz conjugated to world xyzw",
-        "time_policy": "time=max(native_time, 0); countdown never advances race time; action_time counts completed 0.1-second control steps",
+        "time_policy": TIME_POLICY,
         "render_duplicates": "keep the initial zero-time pose; keep the last pose at each positive race timestamp; carry discontinuities across dropped measurements",
         "control_interval_seconds": 0.1,
         "action_keys": list(ACTION_KEYS),

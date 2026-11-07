@@ -361,7 +361,9 @@ def test_failure_during_countdown_keeps_initial_and_final_pose(
         tmp_path / "comparison", root=actors, methods=("bc",), max_steps=3
     )
     assert result.duration == 0
-    assert result.sample(0)[0]["position"] == [0, 2, 3]
+    assert result.sample(0)[0]["position"] == [2, 2, 3]
+    assert result.sample(0)[0]["status"] == "stopped"
+    assert result._measurements["bc"]["position"][0].tolist() == [0, 2, 3]
     assert result.sample(0.001)[0]["position"] == [2, 2, 3]
     assert result.sample(0.001)[0]["status"] == "stopped"
     with np.load(result.path / "bc.npz") as data:
@@ -398,3 +400,82 @@ def test_backward_native_clock_is_rejected():
     rows = [{"native_time": 0.2, "action_time": 0.1}]
     with pytest.raises(ValueError, match="nondecreasing"):
         replay._append_pose(rows, {"native_time": 0.1}, 0, False)
+
+
+@pytest.mark.parametrize("with_controls", [True, False])
+@pytest.mark.parametrize("zero_duration", [True, False])
+def test_v1_load_uses_native_clock_read_only(tmp_path, with_controls, zero_duration):
+    arrays = {
+        "time": np.array([0, 0.1, 0.2]),  # Old synthetic countdown clock.
+        "native_time": np.array([0, 0, 0 if zero_duration else 0.075]),
+        "position": np.array([[0, 2, 3], [1, 2, 3], [2, 2, 3]], float),
+        "rotation": np.array([[0, 0, 0, 1]] * 3, float),
+        "speed": np.zeros(3),
+        "steer": np.zeros(3),
+        "rescue_active": np.zeros(3, bool),
+        "discontinuity": np.zeros(3, bool),
+    }
+    if with_controls:
+        arrays.update(
+            executed_action=np.zeros((3, 5)),
+            action_applied=np.array([False, True, True]),
+            terminated=np.array([False, False, True]),
+            truncated=np.zeros(3, bool),
+        )
+    file = tmp_path / "bc.npz"
+    np.savez_compressed(file, **arrays)
+    manifest = {
+        "format_version": 1,
+        "quaternion_order": "xyzw",
+        "track": "lighthouse",
+        "evaluation_seed": 20000,
+        "time_policy": "old synthetic countdown clock",
+        "ghosts": [
+            {
+                "key": "bc",
+                "method": "bc",
+                "label": "Behavior cloning",
+                "kart": "tux",
+                "color": 0.08,
+            }
+        ],
+        "laps": {
+            "bc": {
+                "file": file.name,
+                "sha256": file_hash(file),
+                "status": "stopped" if zero_duration else "finished",
+            }
+        },
+    }
+    manifest_file = tmp_path / "manifest.json"
+    manifest_file.write_text(json.dumps(manifest))
+    before = {path: file_hash(path) for path in (file, manifest_file)}
+    result = replay.ReplayComparison(tmp_path)
+    assert before == {path: file_hash(path) for path in before}
+    assert result.duration == (0 if zero_duration else 0.075)
+    np.testing.assert_array_equal(
+        result._measurements["bc"]["recorded_time"], arrays["time"]
+    )
+    np.testing.assert_array_equal(
+        result._measurements["bc"]["time"], arrays["native_time"]
+    )
+    np.testing.assert_allclose(result._measurements["bc"]["action_time"], [0, 0.1, 0.2])
+    assert ("executed_action" in result._measurements["bc"]) == with_controls
+    assert "native_time" in result.manifest["clock_conversion"]
+    assert result.manifest["recorded_time_policy"] == "old synthetic countdown clock"
+    assert json.loads(manifest_file.read_text()) == manifest
+    if zero_duration:
+        assert result.sample(0)[0]["position"] == [2, 2, 3]
+        assert result.sample(0)[0]["status"] == "stopped"
+    else:
+        assert result.sample(0)[0]["position"] == [0, 2, 3]
+        assert result.sample(0.0375)[0]["position"] == [1, 2, 3]
+        assert result.sample(0.075)[0]["position"] == [2, 2, 3]
+        assert result.sample(0.075)[0]["status"] == "finished"
+    # A legacy analysis file with positions alone still cannot render orientation.
+    arrays.pop("rotation")
+    np.savez_compressed(file, **arrays)
+    manifest["laps"]["bc"]["sha256"] = file_hash(file)
+    manifest_file.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="orientation"):
+        replay.ReplayComparison(tmp_path)
