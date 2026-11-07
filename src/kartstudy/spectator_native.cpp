@@ -29,10 +29,41 @@ struct Presentation {
     irr::scene::ICameraSceneNode* camera = nullptr;
     std::unique_ptr<RenderTarget> target;
     int width, height;
+    bool fail_next_render = false;
     ~Presentation() {
         ghosts.clear();
         target.reset();
         if (camera) { camera->remove(); camera->drop(); }
+    }
+};
+// STK teardown owns the renderer's current RTT; restore it even on failure.
+struct RenderState {
+    ShaderBasedRenderer* renderer;
+    RTT* rtts;
+    irr::scene::ISceneManager* scene;
+    irr::scene::ICameraSceneNode* camera;
+    GLint read_fbo, draw_fbo, read_buffer, pack, pbo, viewport[4];
+    RenderState() {
+        renderer = dynamic_cast<ShaderBasedRenderer*>(irr_driver->getRenderer());
+        rtts = renderer->getRTTs();
+        scene = irr_driver->getSceneManager();
+        camera = scene->getActiveCamera();
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+        glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+        glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+        glGetIntegerv(GL_VIEWPORT, viewport);
+    }
+    ~RenderState() {
+        renderer->setRTT(rtts);
+        scene->setActiveCamera(camera);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+        glReadBuffer(read_buffer);
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
     }
 };
 template<class F> int checked(F f) {
@@ -141,26 +172,26 @@ int kartstudy_spectator_ghost_state(void* handle, int index, float* out) {
         out[3] = forward.X; out[4] = forward.Y; out[5] = forward.Z;
     });
 }
+void kartstudy_spectator_test_fail_next_render(void* handle) {
+    static_cast<Presentation*>(handle)->fail_next_render = true;
+}
 int kartstudy_spectator_render(void* handle, unsigned char* rgb) {
     return checked([&] {
         auto& p = *static_cast<Presentation*>(handle);
-        auto renderer = dynamic_cast<ShaderBasedRenderer*>(irr_driver->getRenderer());
-        auto saved = renderer->getRTTs();
-        auto scene = irr_driver->getSceneManager();
-        auto active = scene->getActiveCamera();
+        RenderState restore;
         p.target->renderToTexture(p.camera, 0);
         auto fb = static_cast<GL3RenderTarget*>(p.target.get())->getFrameBuffer();
         if (!fb || fb->getWidth() != (unsigned)p.width || fb->getHeight() != (unsigned)p.height)
             throw std::runtime_error("Native target size mismatch");
-        GLint pack; glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         fb->bind(); glReadBuffer(GL_COLOR_ATTACHMENT0);
+        if (p.fail_next_render) {
+            p.fail_next_render = false;
+            throw std::runtime_error("Injected native render failure after target activation");
+        }
         glReadPixels(0, 0, p.width, p.height, GL_RGB, GL_UNSIGNED_BYTE, rgb);
         auto gl_error = glGetError();
-        glPixelStorei(GL_PACK_ALIGNMENT, pack);
-        glBindFramebuffer(GL_FRAMEBUFFER, irr_driver->getDefaultFramebuffer());
-        renderer->setRTT(saved); scene->setActiveCamera(active);
         if (gl_error != GL_NO_ERROR) throw std::runtime_error("Native framebuffer read failed");
     });
 }
