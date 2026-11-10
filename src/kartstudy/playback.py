@@ -60,11 +60,13 @@ def discover_runs(root):
 def load_actor(path):
     # These are trusted local experiment checkpoints, containing rl_mind objects.
     path = Path(path)
-    lightweight = path / "actor.pt"
+    lightweight = path if path.is_file() else path / "actor.pt"
+    actor_only = lightweight.name == "actor.pt" and lightweight.exists()
+    checkpoint = path if path.is_file() else path / "checkpoint.pt"
     state = torch.load(
-        lightweight if lightweight.exists() else path / "checkpoint.pt",
+        lightweight if actor_only else checkpoint,
         map_location="cpu",
-        weights_only=lightweight.exists(),
+        weights_only=actor_only,
         mmap=True,
     )
     config = state["config"]

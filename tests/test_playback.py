@@ -81,6 +81,8 @@ def test_loaded_checkpoint_preserves_deterministic_actions_and_architecture(tmp_
     assert restored == config and step == 50000
     assert not loaded.training
     assert next(loaded.parameters()).device.type == "cpu"
+    exact, _, _ = load_actor(tmp_path / "checkpoint.pt")
+    torch.testing.assert_close(exact.act(obs), actor.act(obs), atol=0, rtol=0)
     # A portable actor-only file must work without replay/optimizer objects.
     torch.save(
         {"actor": actor.state_dict(), "config": config, "step": 50000},
@@ -89,6 +91,8 @@ def test_loaded_checkpoint_preserves_deterministic_actions_and_architecture(tmp_
     (tmp_path / "checkpoint.pt").unlink()
     lightweight, _, _ = load_actor(tmp_path)
     torch.testing.assert_close(lightweight.act(obs), actor.act(obs), atol=0, rtol=0)
+    exact, _, _ = load_actor(tmp_path / "actor.pt")
+    torch.testing.assert_close(exact.act(obs), actor.act(obs), atol=0, rtol=0)
 
 
 def test_selected_policies_hide_extra_runs_without_removing_checkpoints(tmp_path):
@@ -224,3 +228,58 @@ def test_selection_can_register_a_separate_ablation(tmp_path):
     )
     catalog = discover_runs(root)
     assert catalog[("lighthouse", "sac_sym", 0)] == run
+
+
+def test_evolution_uses_real_snapshot_steps_and_checks_provenance(tmp_path):
+    from kartstudy.trajectory_evolution import digest, frame_source, snapshot_sources
+
+    config = {"hidden": 16, "algo": "sac", "seed": 1, "schema_version": SCHEMA_VERSION}
+    actor = Policy(84, hidden=16)
+    for step in [80000, 0, 40000]:
+        directory = tmp_path / "snapshots" / str(step)
+        directory.mkdir(parents=True)
+        path = directory / "actor.pt"
+        torch.save({"actor": actor.state_dict(), "config": config, "step": step}, path)
+        (directory / "manifest.json").write_text(
+            json.dumps(
+                {"actor_file_sha256": digest(path), "step": step, "config": config}
+            )
+        )
+    rows = snapshot_sources(tmp_path)
+    assert [r["step"] for r in rows] == [0, 40000, 80000]
+    assert [r["step"] for r in snapshot_sources(tmp_path, [40000])] == [40000]
+    run = {"config": config, "snapshots": rows}
+    assert frame_source(run, 60000) is None
+    assert frame_source(run, 40000)["step"] == 40000
+    run["config"] = {**config, "algo": "bc"}
+    assert frame_source(run, 60000) is rows[0]
+    path = tmp_path / "snapshots/40000/actor.pt"
+    torch.save({"actor": actor.state_dict(), "config": config, "step": 60000}, path)
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        snapshot_sources(tmp_path)
+
+
+def test_evolution_breaks_rescue_teleports_and_rejects_changed_cache(tmp_path):
+    import numpy as np
+
+    from kartstudy.trajectory_evolution import digest, read_trace
+
+    path = tmp_path / "trace.npz"
+    np.savez(
+        path,
+        world_position=[[0, 0, 0], [1, 0, 1], [30, 0, 30], [31, 0, 31]],
+        rescue_active=[False, True, False, False],
+        rescue_count=[0, 1, 1, 1],
+    )
+    row = {
+        "trajectory": path.name,
+        "trajectory_sha256": digest(path),
+        "episodes": [{"steps": 4}],
+    }
+    positions, driven, rescues = read_trace(tmp_path, row)
+    assert np.isnan(driven[1]).all()
+    np.testing.assert_array_equal(rescues, positions[[1]])
+    with path.open("ab") as stream:
+        stream.write(b"changed")
+    with pytest.raises(ValueError, match="Cached trajectory changed"):
+        read_trace(tmp_path, row)

@@ -45,3 +45,55 @@ uv run python -m kartstudy.playback --policy rlpd --track stk_enterprise \
 are refused. `--limit-steps 100` makes a labeled partial preview. Fresh rendering
 may introduce tiny floating-point differences; official evaluation logs remain
 authoritative and are never replaced by video metadata.
+
+## Trajectory evolution across training
+
+Animate **training action count**, with a complete deterministic lap in each frame.
+The map, scale, evaluation seed and 1,500-action horizon stay fixed across all
+inputs. The dashed expert trajectory is a spatial reference; native rescue
+animations break the driven line, crosses mark rescues, open circles mark timeouts,
+and squares mark finishes. Completion and conditional lap time accompany each map.
+
+```sh
+uv run --with matplotlib python -m kartstudy.trajectory_evolution \
+  --input PATH_TO_RUN [ANOTHER_RUN ...] \
+  --track zengarden --eval-seed 20000 \
+  --output runs/trajectory-evolution-example
+```
+
+Inputs can be run directories, individual snapshot directories, or trusted local
+`actor.pt`/`checkpoint.pt` files in this project's policy format. Run directories
+with `snapshots/` use that saved history, sorted by the recorded action count;
+otherwise they use the final actor/checkpoint. Different methods, training seeds
+and backends may appear together, explicitly labeled. All inputs must use schema
+3, 84 observations, five controls and the same episode horizon. `--steps 0 40000
+160000 400000` restricts evaluation to existing snapshots at those counts. BC is
+an explicitly fixed fitted reference; missing online snapshots remain missing.
+No intermediate policy is reconstructed from a final checkpoint.
+
+Each fresh output directory contains:
+
+- `evolution.gif`: matched panels changing together every 800 ms (`--frame-ms`).
+- `frames/actions-*.png`: every animation frame as a still image.
+- `run-*-keyframes.png` and `.pdf`: one compact chronological strip per input.
+  Choose its columns with `--key-steps 0 40000 160000 400000`; the default picks
+  up to four chronological stages without ranking performance.
+- Trajectory NPZs, cached native driveline, evaluation records and a provenance
+  manifest with input/output hashes, local evaluation source, versions and platform.
+
+Redraw or change the static strip without running the simulator again:
+
+```sh
+uv run --with matplotlib python -m kartstudy.trajectory_evolution \
+  --render-only --output runs/trajectory-evolution-example \
+  --key-steps 0 40000 160000 400000 --frame-ms 1200
+```
+
+Collection refuses an existing output directory. Rendering verifies cached input
+hashes and may replace only its generated figures. These are fresh headless CPU
+evaluations, including for CUDA-trained actors, and never replace official logs.
+Any installed native race track is supported. An unfamiliar track means absent
+from that run's training list; supplemental tracks such as Zen Garden are not
+part of the original thirteen-track final assessment. Top-down maps can obscure
+overpasses and dwell time, so use their saved episode metrics and trajectories
+for interpretation. A single evaluation seed illustrates behavior, not robustness.
