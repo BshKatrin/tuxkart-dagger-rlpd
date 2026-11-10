@@ -1,4 +1,6 @@
 import json
+import runpy
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,6 +10,151 @@ from kartstudy.environment import SCHEMA_VERSION
 from kartstudy.evaluation import evaluate, summarize_runs
 from kartstudy.expert_evaluation import banana_contact, harmful_rows, summarize
 from kartstudy.metrics import DrivingMetrics
+
+
+@pytest.fixture(scope="module")
+def road_analysis():
+    return runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "report/scripts/track_time_loss.py")
+    )
+
+
+def test_sector_timing_keeps_reversing_delay_and_official_finish(road_analysis):
+    sectors = road_analysis["first_passage_sectors"](
+        [0, 8, 4, 8, 12, 20],
+        [0, 1, 2, 3, 4, 5],
+        [0, 10, 20],
+        [False] * 6,
+        finish_time=4.9,
+    )
+    assert sectors == pytest.approx([3.5, 1.4])
+    assert sectors.sum() == pytest.approx(4.9)
+
+
+def test_trajectory_length_keeps_reversing_but_excludes_rescue_jumps(monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "report/scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    length = runpy.run_path(str(scripts / "local_performance.py"))["trajectory_length"]
+    positions = np.zeros((7, 3))
+    positions[:, 0] = [0, 0, 3, 1, 100, 103, 106]
+    # Countdown repeats t=0. Reversing adds 2 m; rescue movement adds nothing.
+    # The final interval contributes only its first half before official finish.
+    assert length(positions, [0, 0, 1, 2, 3, 4, 5],
+                  [False, False, False, False, True, False, False],
+                  [0, 0, 0, 0, 1, 1, 1], 4.5) == pytest.approx(6.5)
+    assert length([[0, 0, 0], [0, 3, 4]], [0, 1],
+                  [False, False], [0, 0], 1) == pytest.approx(5)
+    # Count changes also detect a rescue occurring between recorded snapshots.
+    assert length([[0, 0, 0], [100, 0, 0]], [0, 1],
+                  [False, False], [0, 1], 1) == 0
+
+
+def test_sector_timing_censors_unfinished_and_rescued_sections(road_analysis):
+    sectors = road_analysis["first_passage_sectors"](
+        [0, 10, 20, 25],
+        [0, 1, 2, 3],
+        [0, 10, 20, 30],
+        [False, False, True, False],
+    )
+    assert sectors[0] == pytest.approx(1)
+    assert np.isnan(sectors[1])
+    assert np.isnan(sectors[2])
+
+
+def test_road_gates_compare_alternative_routes_between_shared_junctions(road_analysis):
+    geometry = {
+        "length": 40,
+        "distances": [[0, 10], [10, 20], [20, 30], [30, 40], [10, 30]],
+        "successors": [[1, 4], [2], [3], [0], [3]],
+    }
+    gates, branches = road_analysis["timing_gates"](geometry, spacing=5)
+    assert branches == [[10, 30]]
+    assert gates == pytest.approx([0, 5, 10, 30, 35, 40])
+
+
+def test_report_aggregate_keeps_timeouts_and_weights_offroad_by_exposure(road_analysis):
+    def episode(seed, success, time, offroad, rescues):
+        return {
+            "seed": seed,
+            "success": success,
+            "lap_time": time if success else None,
+            "timeout": not success,
+            "sim_seconds": time,
+            "measurement_seconds": time,
+            "off_track_seconds": offroad,
+            "rescue_count": rescues,
+        }
+
+    records = {
+        "easy": [episode(1, True, 10, 1, 0), episode(2, True, 20, 2, 0)],
+        "hard": [episode(1, False, 100, 50, 1), episode(2, True, 30, 3, 1)],
+    }
+    result = road_analysis["aggregate_episodes"](records, [1, 2], horizon=100)
+    assert result["completed"] == 3
+    assert result["attempts"] == 4
+    assert result["successful_lap_time_mean"] == pytest.approx(20)
+    assert result["capped_time_by_evaluation_seed"] == pytest.approx([55, 25])
+    assert result["capped_time_mean"] == pytest.approx(40)
+    assert result["offroad_pct"] == pytest.approx(100 * 56 / 160)
+    assert result["rescues_per_attempt"] == pytest.approx(0.5)
+    records["hard"][0]["sim_seconds"] = 50
+    with pytest.raises(ValueError, match="timeout budget"):
+        road_analysis["aggregate_episodes"](records, [1, 2], horizon=100)
+
+
+def test_profiles_interpolate_original_samples_after_reversing(road_analysis):
+    values = road_analysis["first_crossing_values"](
+        np.array([0, 8, 4, 8, 12, 20]),
+        np.array([[0], [8], [2], [14], [20], [25]]),
+        np.array([10, 30]),
+    )
+    assert values[0, 0] == pytest.approx(17)
+    assert np.isnan(values[1, 0])
+
+
+def test_road_lateral_position_keeps_offroad_offsets_and_ignores_height(road_analysis):
+    geometry = {
+        "nodes": [[[0, 0, 0], [0, 0, 100]]],
+        "distances": [[0, 100]],
+        "widths": [[10]],
+    }
+    lateral = road_analysis["road_lateral_positions"](
+        np.array([[2, 0, 10], [2, 30, 20], [-6, 0, 30]]),
+        np.array([10, 20, 30]),
+        geometry,
+    )
+    assert lateral == pytest.approx([0.4, 0.4, -1.2])
+
+
+def test_local_summary_cancels_signed_gaps_and_keeps_available_segments(road_analysis):
+    expert = np.array([10.0, 20.0])
+    speed = np.array([5.0, 30.0])
+    offset = np.array([0.2, 1.0])
+    lengths = np.array([20.0, 40.0])
+    usable = np.array([True, True])
+    partial = road_analysis["reduce_local_sectors"](
+        np.array([12.0, np.nan]),
+        expert,
+        speed,
+        offset,
+        lengths,
+        usable,
+    )
+    assert partial == pytest.approx(
+        {"signed_gap": 2, "segments": 1, "speed": 5, "lateral": 20}
+    )
+    complete = road_analysis["reduce_local_sectors"](
+        np.array([12.0, 19.0]),
+        expert,
+        speed,
+        offset,
+        lengths,
+        usable,
+    )
+    assert complete["signed_gap"] == pytest.approx(20 / 60)
+    assert complete["segments"] == 2
+    assert complete["speed"] == pytest.approx(1300 / 60)
+    assert complete["lateral"] == pytest.approx(100 * 44 / 60)
 
 
 def test_driving_metrics_weight_race_time_and_count_rescue_episodes():

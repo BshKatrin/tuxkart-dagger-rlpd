@@ -33,32 +33,35 @@ rows means N/A. Newly dropped bubblegum contacts are not fully measured.
 See [measurement definitions and limits](expert-evaluation.md).
 
 The table lists all 21 installed race tracks, all available in the viewer.
-Thirteen are study tracks (training or held out); eight are outside the study. Use the exact simulator
-ID with `--track`. Difficulty is never passed to the policy.
+Eight are selected for the report maps: four training and four held-out tracks;
+the other thirteen are unused in these figures. The original suite's thirteen-track
+final evaluations remain unchanged. Use the exact simulator ID with `--track`.
+Difficulty is never passed to the policy. See the [road-map analysis](road-analysis.md)
+for the additional matched expert references and Zen Garden evaluations.
 
 | Track | Simulator ID | Expert difficulty | Study role | Contacts / rows (%) | Off-track time (%) |
 |---|---|---|---|---:|---:|
-| Antediluvian Abyss | `abyss` | Simple | Held out | 0.00 | 0.00 |
+| Antediluvian Abyss | `abyss` | Simple | Unused | 0.00 | 0.00 |
 | Around the Lighthouse | `lighthouse` | Simple | Training | N/A | 0.00 |
-| Candela City | `candela_city` | Simple | Held out | 0.00 | 0.22 |
-| Cocoa Temple | `cocoa_temple` | Simple | Held out | 0.00 | 0.63 |
+| Candela City | `candela_city` | Simple | Unused | 0.00 | 0.22 |
+| Cocoa Temple | `cocoa_temple` | Simple | Unused | 0.00 | 0.63 |
 | Cornfield Crossing | `cornfield_crossing` | Simple | Training | 19.44 | 0.04 |
 | Gran Paradiso Island | `gran_paradiso_island` | Simple | Unused | 0.00 | 0.93 |
 | Hacienda | `hacienda` | Simple | Held out | N/A | 1.41 |
 | Nessie's Pond | `scotland` | Simple | Unused | 12.50 | 0.00 |
 | Shifting Sands | `sandtrack` | Simple | Unused | 15.00 | 0.00 |
 | Snow Peak | `snowtuxpeak` | Simple | Unused | 0.00 | 0.40 |
-| Volcan Island | `volcano_island` | Simple | Held out | 0.00 | 1.22 |
+| Volcan Island | `volcano_island` | Simple | Unused | 0.00 | 1.22 |
 | XR591 | `xr591` | Simple | Unused | 15.38 | 0.00 |
 | Black Forest | `black_forest` | Medium | Training | 3.00 | 3.89 |
 | Northern Resort | `snowmountain` | Medium | Held out | 6.82 | 2.20 |
-| Old Mine | `mines` | Medium | Held out | 7.69 | 3.38 |
+| Old Mine | `mines` | Medium | Unused | 7.69 | 3.38 |
 | Oliver's Math Class | `olivermath` | Medium | Unused | 25.00 | 3.41 |
-| Fort Magma | `fortmagma` | Difficult | Held out | 0.00 | 12.30 |
+| Fort Magma | `fortmagma` | Difficult | Unused | 0.00 | 12.30 |
 | Minigolf | `minigolf` | Difficult | Unused | 0.00 | 23.20 |
 | Ravenbridge Mansion | `ravenbridge_mansion` | Difficult | Held out | 0.00 | 10.34 |
 | STK Enterprise | `stk_enterprise` | Difficult | Training | 15.38 | 13.26 |
-| Zen Garden | `zengarden` | Difficult | Unused | 0.00 | 10.57 |
+| Zen Garden | `zengarden` | Difficult | Held out | 0.00 | 10.57 |
 
 Diagnostic JSON is distributed in `study-data.zip` under
 `runs/expert-road-quality-final/metrics.json`. The distinction between native

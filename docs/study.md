@@ -126,3 +126,17 @@ fixed evaluation seeds are unchanged. This matches the demonstration budget of t
 so SAC versus SAC symmetric sampling isolates the sampling change.
 Its artifacts and source snapshot live separately from the stopped main suite;
 its result is not included in the four-policy release.
+
+## Supplemental report maps
+
+The [road-map analysis](road-analysis.md) uses the eight-track report selection
+in [tracks and policies](tracks-and-policies.md), including supplemental Zen Garden
+evaluations and matched expert references. It is post-training analysis of the
+retained checkpoints; the completed suite and its original thirteen-track final
+evaluations remain unchanged.
+
+Intermediate-policy trajectory maps are exploratory post-training evaluations,
+using a fixed track, evaluation seed and horizon across saved action counts; see
+[trajectory evolution](visualization.md#trajectory-evolution-across-training).
+They do not select checkpoints for the original final comparison. A single
+trajectory illustrates behavior rather than variability across training runs.
