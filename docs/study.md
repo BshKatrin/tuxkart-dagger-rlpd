@@ -140,3 +140,9 @@ using a fixed track, evaluation seed and horizon across saved action counts; see
 [trajectory evolution](visualization.md#trajectory-evolution-across-training).
 They do not select checkpoints for the original final comparison. A single
 trajectory illustrates behavior rather than variability across training runs.
+
+The [exploratory disturbance study](disturbance-study.md) freezes expert-prefix
+physical interventions at one training and one held-out location before comparing
+final policies. Independent scripted witnesses establish recoverability of the
+selected expert-failure states. These cases are not additional official test
+replicates and do not change the completed training or evaluation protocol.

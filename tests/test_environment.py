@@ -160,3 +160,115 @@ def test_real_track_switch_preserves_one_simulator_and_resets_expert():
         assert not np.array_equal(first, second)
     finally:
         env.close()
+
+
+def test_disturbance_recovery_requires_sustained_progress_and_separates_native_rescue():
+    from kartstudy.disturbance import Recovery
+
+    def sample(progress, on_road=True, rescues=0):
+        return {
+            "progress": progress,
+            "is_on_road": on_road,
+            "rescue_active": False,
+            "rescue_count": rescues,
+        }
+
+    recovery = Recovery(100, 0)
+    for i in range(20):
+        recovery.update(sample(100 + i), i * 0.1)
+    assert recovery.time is None
+    recovery.update(sample(120), 2.0)
+    assert recovery.time == 2.0
+    # A native rescue must disqualify subsequent driving as independent recovery.
+    assisted = Recovery(100, 0)
+    assisted.update(sample(100, rescues=1), 0.1)
+    for i in range(30):
+        assisted.update(sample(200 + i, rescues=1), 0.2 + i * 0.1)
+    assert assisted.time is None and assisted.assisted
+    # A slow/stationary kart and interrupted road contact do not qualify.
+    stalled = Recovery(100, 0)
+    for i in range(30):
+        stalled.update(sample(100), i * 0.1)
+    assert stalled.time is None
+    stalled.update(sample(100, on_road=False), 3.0)
+    assert not stalled.window
+
+
+def test_real_disturbance_replays_identical_state_and_preserves_expert_history():
+    from kartstudy.disturbance import trial
+
+    env = DrivingEnv(track="lighthouse")
+    scenario = {
+        "track": "lighthouse",
+        "eval_seed": 20000,
+        "anchor_m": 2,
+        "pulses": [
+            {
+                "steps": 30,
+                "steer": -1,
+                "throttle": 1,
+                "brake": -1,
+                "nitro": -1,
+                "fire": -1,
+            }
+        ],
+    }
+    try:
+        expert = trial(env, scenario)
+        witness = trial(
+            env,
+            scenario,
+            "scripted",
+            correction=[{"steps": 15, "action": [0, -1, 1, -1, -1]}],
+        )
+    finally:
+        env.close()
+    assert expert["handover"] == witness["handover"]
+    assert expert["anchor"] == witness["anchor"]
+    assert expert["response_steps"] + expert["handover_steps"] == 1500
+    assert not expert["success"] and expert["recovery_seconds"] is None
+    assert expert["native_rescues_after_handover"] == 0
+    assert witness["success"] and witness["recovered_within_15s"]
+    assert witness["native_rescues_after_handover"] == 0
+
+
+def test_temporary_control_delay_uses_shared_history_and_restores_current_control():
+    from kartstudy.disturbance import ControlDelay
+
+    history = [np.array([v, 1, -1, -1, -1], np.float32) for v in [0.1, 0.2, 0.3]]
+    delay = ControlDelay(history, steps=2, duration_steps=3)
+    requests = [np.array([v, 1, -1, -1, -1], np.float32) for v in [0.4, 0.5, 0.6, 0.7]]
+    executed = [delay.execute(action, index) for index, action in enumerate(requests)]
+    np.testing.assert_allclose([a[0] for a in executed], [0.2, 0.3, 0.4, 0.7])
+    np.testing.assert_allclose([a[0] for a in history], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose([a[0] for a in requests], [0.4, 0.5, 0.6, 0.7])
+
+
+def test_real_delayed_controls_record_requests_execution_and_restoration(tmp_path):
+    from kartstudy.disturbance import trial
+
+    env = DrivingEnv(track="lighthouse")
+    scenario = {
+        "track": "lighthouse",
+        "eval_seed": 20000,
+        "anchor_m": 100,
+        "pulses": [],
+        "control_delay": {"steps": 3, "duration_steps": 6},
+    }
+    try:
+        result = trial(env, scenario, save=tmp_path / "delay")
+    finally:
+        env.close()
+    with np.load(tmp_path / "delay.npz") as trace:
+        start = np.flatnonzero(trace["phase"] == "response")[0]
+        np.testing.assert_array_equal(
+            trace["action"][start : start + 6],
+            trace["requested_action"][start - 3 : start + 3],
+        )
+        np.testing.assert_array_equal(
+            trace["action"][start + 6 :], trace["requested_action"][start + 6 :]
+        )
+        assert trace["delay_active"].sum() == 6
+    assert abs(result["recovery_start_seconds"] - 0.6) < 1e-4
+    assert result["delay_release"] is not None
+    assert result["recovery_seconds"] is None or result["recovery_seconds"] >= 2
