@@ -229,3 +229,78 @@ brake-priority diagnostic (force throttle to zero whenever brake is requested)
 is a controller intervention, not the original trained policy's performance.
 Keep its results and provenance separate; do not silently fix decoding for only
 one method or retrospectively replace completed evaluations.
+
+## Frozen-critic Monte Carlo signed error
+
+Use `kartstudy.critic_mc` to compare the mean online critic prediction with an
+independent soft-return estimate. This diagnostic uses final SAC, SAC + symmetric
+sampling and RLPD checkpoints, with exactly matched portable actor weights and
+training seeds 0--2. Do not substitute a different run with the same seed.
+
+For Lighthouse, replay the original expert prefix to 2 m, then either continue
+the expert for 30 actions or apply the frozen 30-action full-left/full-throttle
+pulse. The two measurement states have the same native time and prefix length;
+the perturbed state must match the original recovery experiment exactly. This
+ordinary control is later than the prefix-only control in the recovery bank.
+
+For each state and policy, fix the first action to `tanh(mean)` and evaluate the
+online critic ensemble mean at that exact normalized action. Use 30 independently
+seeded stochastic policy continuations afterward, pairing action-noise seeds
+between policies and conditions. CPU inference, physical action decoding, reward,
+observations and native rescue behavior remain unchanged. No recovery, completion
+or lap-time comparison is computed in this diagnostic.
+
+The Monte Carlo return is the discounted reward sum plus future entropy bonuses
+`-alpha * log_prob`, using the saved temperature and discount. The fixed first
+action contributes no entropy term, matching the critic's Bellman convention.
+Signed error is `b = mean(Q_i) - mean(MC soft return)`. Positive values indicate
+optimism and negative values indicate pessimism at the selected state/action;
+this is not a comparison with the optimal recoverable value.
+
+Continue until a genuine lap finish or 2,500 response actions. An artificial
+cutoff does not become a terminal-zero training target. For unfinished rollouts,
+check that the discounted contribution after action 1,500 is below 0.001 return
+units; the remaining discount at 2,500 actions is about 1.2e-11 when gamma=0.99.
+Never bootstrap a Monte Carlo reference from the critic being evaluated.
+
+Report each training seed's signed error and Monte Carlo uncertainty separately,
+then average signed errors equally across the 3 trained policies. Monte Carlo
+repetitions are not independent training runs. Frozen signatures, complete control
+tapes, actor/critic/source hashes, per-action observations, actions, rewards and
+log probabilities are retained under a fresh ignored output directory.
+
+```sh
+uv run python -m kartstudy.critic_mc \
+  --inputs runs/disturbance-study-20261110/policy-inputs.json \
+  --reference runs/five-disturbances-v1/evaluation/left_throttle_lighthouse--expert.json \
+  --output runs/new-critic-mc
+```
+
+The same signed-error protocol also applies to the 4 remaining frozen cases:
+Enterprise barrier, Cornfield wrong direction, Black Forest alternate branch,
+and Hacienda temporary latency. Use the original expert result for `--reference`.
+For pulse/tape interventions, measurement is immediately after the intervention;
+its undisturbed control follows the expert for the same number of actions. Keep
+one native simulator per worker process and keep all policy inference on CPU.
+
+For temporary latency, measure at normal-control restoration, not delay onset.
+The original expert supplies requested controls during the delayed interval;
+the fixed queue is initialized with its actual prefix actions. The perturbed
+signature must equal that original expert trial's `delay_release`. The control
+continues the undelayed expert for the same duration. Discard queued controls
+before Monte Carlo continuation so the transition dynamics again match training.
+This is one shared expert-generated delayed state for every critic; it is not
+an evaluation of each actor's different state after experiencing latency itself.
+Store and replay the full executed control tape and verify the same physical
+state before every continuation. The continuation budget is 2,500 actions beyond
+the measurement point, including the extra delayed interval in prefix accounting.
+
+For the signed-error/recovery figure, pair each training seed's perturbed-state
+`b` with deterministic recovery within 15 s at that exact state. This compares
+stochastic-value calibration with deterministic behavior. Reuse pulse/tape
+recovery labels only after verifying actor hashes and handover signatures.
+Reevaluate latency from the shared expert-generated post-delay state; the original
+policy-specific latency outcomes cannot supply these labels. Preserve the new
+traces separately. `report/scripts/critic_error_recovery.py` produces the figure
+and its paired data. The matrix uses disturbance rows, method columns, and one
+bar per training seed at a shared bias scale; no policy averages are plotted.

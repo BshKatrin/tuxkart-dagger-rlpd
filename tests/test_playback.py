@@ -9,6 +9,70 @@ from kartstudy.playback import discover_runs, load_actor
 from kartstudy.tracks import ALL_TRACKS
 
 
+def test_critic_diagnostic_rejects_a_different_actor_at_the_same_seed(tmp_path):
+    from kartstudy.algorithms import SAC
+    from kartstudy.critic_artifacts import export_checkpoint
+    from kartstudy.critic_mc import load_critic_checkpoint
+
+    config = {"algo": "sac", "seed": 0, "hidden": 8, "schema_version": 3, "gamma": 0.99}
+    learner = SAC(84, device="cpu", hidden=8)
+    checkpoint = tmp_path / "checkpoint.pt"
+    portable = tmp_path / "actor.pt"
+    actor_weights = {
+        name: value.clone() for name, value in learner.actor.state_dict().items()
+    }
+    torch.save(
+        {
+            "config": config,
+            "step": 400000,
+            "actor": actor_weights,
+            "learner": {"model": learner.state_dict(), "optimizers": {}},
+            "replay": torch.arange(1000),
+        },
+        checkpoint,
+    )
+    torch.save({"config": config, "step": 400000, "actor": actor_weights}, portable)
+    actor, critics, _, _, alpha = load_critic_checkpoint(checkpoint, portable)
+    torch.testing.assert_close(actor.mean.bias, learner.actor.mean.bias)
+    assert len(critics) == 2 and alpha == pytest.approx(0.1)
+    frozen = tmp_path / "evaluation.pt"
+    export_checkpoint(checkpoint, portable, frozen)
+    exported = torch.load(frozen, weights_only=False)
+    assert "replay" not in exported and set(exported["learner"]) == {"model"}
+    restored_actor, restored_critics, _, _, restored_alpha = load_critic_checkpoint(frozen, portable)
+    torch.testing.assert_close(restored_actor.mean.bias, actor.mean.bias, atol=0, rtol=0)
+    for before, after in zip(critics.parameters(), restored_critics.parameters(), strict=True):
+        torch.testing.assert_close(before, after, atol=0, rtol=0)
+    assert restored_alpha == alpha
+    with pytest.raises(FileExistsError):
+        export_checkpoint(checkpoint, portable, frozen)
+    actor_weights["mean.bias"][0] += 1
+    torch.save({"config": config, "step": 400000, "actor": actor_weights}, portable)
+    with pytest.raises(ValueError, match="does not match"):
+        load_critic_checkpoint(checkpoint, portable)
+
+
+def test_critic_release_resolves_restored_paths_before_existing_originals(tmp_path):
+    from kartstudy.critic_artifacts import INPUTS, resolve_artifact
+
+    original = tmp_path / "original"
+    original.mkdir()
+    actor = original / "actor.pt"
+    actor.write_bytes(b"original")
+    restored = tmp_path / "restored"
+    index = restored / INPUTS / "manifest.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(json.dumps({
+        "original_repository_root": str(original),
+        "path_map": {str(actor): "runs/frozen/actor.pt"},
+    }))
+    assert resolve_artifact(actor, restored) == restored / "runs/frozen/actor.pt"
+    assert resolve_artifact(original / "runs/ref.json", restored) == restored / "runs/ref.json"
+    assert resolve_artifact("runs/new.json", restored) == restored / "runs/new.json"
+    with pytest.raises(ValueError, match="escapes"):
+        resolve_artifact("../outside.pt", restored)
+
+
 def test_playback_offers_nonstudy_tracks_with_learned_policies(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

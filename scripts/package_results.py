@@ -53,7 +53,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("dist/study"))
     parser.add_argument("--root", type=Path, default=Path("runs/study-polar-four"))
+    parser.add_argument("--monte-carlo", action="store_true", help="Package the completed five-case Monte Carlo diagnostic")
     args = parser.parse_args()
+    if args.monte_carlo:
+        package_monte_carlo(args.output)
+        return
     root = args.root
     manifest = json.loads((root / "manifest.json").read_text())
     selection = json.loads((root / "selected-policies.json").read_text())
@@ -188,6 +192,28 @@ def main():
         json.dumps(description, indent=2) + "\n"
     )
     print("Verified release ZIP archives and wrote SHA256SUMS.", flush=True)
+
+
+def package_monte_carlo(output):
+    from kartstudy.critic_artifacts import prepare_release, verify
+
+    output.mkdir(parents=True, exist_ok=False)
+    groups = prepare_release(Path.cwd())
+    validation = verify(Path.cwd())
+    assets = [create_archive(output / name, files) for name, files in groups]
+    manifest = {
+        "packaging_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "packaging_script_sha256": sha256(Path(__file__)),
+        "validation": validation, "assets": assets,
+        "extraction": "Verify SHA256SUMS; extract both ZIPs at the repository root, preserving paths.",
+        "frozen_models": "Derived evaluation-only checkpoints retain exact model weights, temperature and configuration. Original full-checkpoint hashes are preserved; optimizers and replay are excluded.",
+        "verification": "uv run python -m kartstudy.critic_artifacts",
+    }
+    path = output / "artifact-manifest.json"
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    checksums = [(asset["sha256"], asset["name"]) for asset in assets] + [(sha256(path), path.name)]
+    (output / "SHA256SUMS").write_text("".join(f"{checksum}  {name}\n" for checksum, name in checksums))
+    print(json.dumps(validation), flush=True)
 
 
 if __name__ == "__main__":

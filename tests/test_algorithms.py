@@ -65,6 +65,26 @@ def test_terminal_target_and_timeout_bootstrap():
     torch.testing.assert_close(target, torch.tensor([1.0, 10.9]))
 
 
+def test_monte_carlo_soft_q_matches_bellman_entropy_convention():
+    from kartstudy.critic_mc import soft_return
+
+    # Q(s,a) excludes the fixed first action's entropy, but includes entropy at
+    # each subsequent action, including the action that finishes the episode.
+    gamma, alpha = 0.9, 0.4
+    expected = 1 + gamma * (2 + alpha) + gamma**2 * (3 - 2 * alpha)
+    assert soft_return([1, 2, 3], [999, -1, 2], gamma, alpha) == pytest.approx(expected)
+    assert soft_return([1], [999], gamma, alpha) == 1
+    recursive = bellman_target(
+        torch.tensor([1.0]),
+        torch.tensor([False]),
+        torch.tensor([2 + gamma * (3 - 2 * alpha)]),
+        torch.tensor([-1.0]),
+        gamma,
+        alpha,
+    )
+    assert recursive.item() == pytest.approx(expected)
+
+
 def test_symmetric_sampling_preserves_prior_fraction_after_online_growth():
     prior, online = ReplayBuffer(100), ReplayBuffer(1000)
     for buffer, count, value in [(prior, 10, -1.0), (online, 1000, 1.0)]:

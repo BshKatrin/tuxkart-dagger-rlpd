@@ -195,6 +195,7 @@ def test_disturbance_recovery_requires_sustained_progress_and_separates_native_r
 
 
 def test_real_disturbance_replays_identical_state_and_preserves_expert_history():
+    from kartstudy.critic_mc import freeze_states
     from kartstudy.disturbance import trial
 
     env = DrivingEnv(track="lighthouse")
@@ -221,6 +222,18 @@ def test_real_disturbance_replays_identical_state_and_preserves_expert_history()
             "scripted",
             correction=[{"steps": 15, "action": [0, -1, 1, -1, -1]}],
         )
+        states = freeze_states(env, expert)
+        assert states["perturbed"]["signature"] == expert["handover"]
+        assert states["ordinary"]["signature"] != states["perturbed"]["signature"]
+        assert (
+            states["ordinary"]["prefix_steps"]
+            == states["perturbed"]["prefix_steps"]
+            == 57
+        )
+        assert (
+            states["ordinary"]["signature"]["native_time"]
+            == states["perturbed"]["signature"]["native_time"]
+        )
     finally:
         env.close()
     assert expert["handover"] == witness["handover"]
@@ -245,11 +258,13 @@ def test_temporary_control_delay_uses_shared_history_and_restores_current_contro
 
 
 def test_real_delayed_controls_record_requests_execution_and_restoration(tmp_path):
+    from kartstudy.algorithms import Policy
+    from kartstudy.critic_mc import continuation, freeze_states
     from kartstudy.disturbance import trial
 
-    env = DrivingEnv(track="lighthouse")
+    env = DrivingEnv(track="hacienda")
     scenario = {
-        "track": "lighthouse",
+        "track": "hacienda",
         "eval_seed": 20000,
         "anchor_m": 100,
         "pulses": [],
@@ -257,6 +272,33 @@ def test_real_delayed_controls_record_requests_execution_and_restoration(tmp_pat
     }
     try:
         result = trial(env, scenario, save=tmp_path / "delay")
+        states = freeze_states(env, result)
+        assert states["perturbed"]["signature"] == result["delay_release"]
+        assert states["perturbed"]["signature"] != result["handover"]
+        assert (
+            states["ordinary"]["prefix_steps"]
+            == states["perturbed"]["prefix_steps"]
+            == result["handover_steps"] + 6
+        )
+        assert (
+            states["ordinary"]["signature"]["native_time"]
+            == states["perturbed"]["signature"]["native_time"]
+        )
+        actor = Policy(84, hidden=8).eval()
+        _, trace = continuation(
+            env,
+            states["perturbed"],
+            20000,
+            actor,
+            np.array([0, -1, -1, -1, -1], np.float32),
+            gamma=0.99,
+            alpha=0.01,
+            noise_seed=41000,
+            horizon=2,
+        )
+        np.testing.assert_array_equal(
+            trace["obs"][0], np.asarray(result["delay_release"]["obs"], np.float32)
+        )
     finally:
         env.close()
     with np.load(tmp_path / "delay.npz") as trace:
