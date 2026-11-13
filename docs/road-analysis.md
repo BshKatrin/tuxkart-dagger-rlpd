@@ -69,7 +69,30 @@ separately, with the expert as a reference. Completion counts retain all attempt
 Successful lap time averages only completed laps and therefore describes different
 subsets when completion differs; it must not determine the ranking by itself.
 
-Budget-capped completion time uses official finish time on success and the common
+The report's lap-performance and driving-behavior tables additionally include
+completed training seeds 0–2 at matched final budgets. Each table cell gives the
+equally weighted mean of the 3 run-level summaries, with the observed minimum
+and maximum underneath. These ranges describe the observed training runs, not
+confidence intervals. Training and held-out tracks remain separate, and the
+expert is one shared reference evaluation. The retained seed-0 figures and maps
+continue to describe evaluation variability within that controller; their SDs
+are not variability across training runs. The completed suite's protocol and
+source snapshots remain unchanged.
+
+The updated tables and training-seed capped-time bars use 30 evaluation seeds
+(20000–20029) on the same eight report tracks, giving 120 attempts per split and
+training run. Regenerate their inputs with `report/scripts/prepare_performance.py`
+from the separate report trajectory collection defined in the
+[supplemental protocol](protocols/reevaluation-thirty-seeds.md). The bar error bars
+are ±1 sample SD across the 30 evaluation-seed means, each averaging four tracks.
+They describe evaluation variability within a fixed training run. These report
+summaries retain the 150 s failure score used by the previous report tables.
+The original seed-0 spatial-map inputs remain unchanged. The Enterprise RLPD
+overview now averages the three training runs and 30 evaluation seeds, as
+described below; the other spatial figures retain their original inputs.
+
+The original `aggregate-metrics.json` budget-capped completion time uses official
+finish time on success and the common
 race-clock timeout on failure. The script verifies that every failed attempt is
 a timeout at the same horizon (148.075 s in these artifacts), rather than choosing
 a penalty to favor a policy. Time is averaged over the fixed tracks within each
@@ -154,6 +177,25 @@ Coverage and conditional support differ across policies, so this table explains
 local behavior rather than replacing the completion/capped-time comparison.
 
 ## Static multi-metric overview
+
+The report's RLPD/Enterprise overview uses the same three completed training
+runs and 30 evaluation seeds as the updated tables:
+
+```sh
+uv run --with matplotlib --with seaborn python report/scripts/segment_comparison_draft.py --aggregate-training-seeds
+```
+
+This reads `performance-thirty-seeds/sources-s0.json` through `sources-s2.json`
+under `report/generated/` and writes
+`report/generated/enterprise-rlpd-thirty-seeds/`. Pair each RLPD trajectory with
+the expert trajectory using the same evaluation seed. Average each region's
+paired differences within each training run, then average the three run means
+equally. The expert's 30 reference trajectories are shared, rather than treated
+as independent training replicates. All 61 regions have all 90 paired traversals.
+The overview uses solid colors for the regional means. The JSON retains
+training-run SDs, per-run means, evaluation SDs, pair counts and source hashes.
+
+The original single-training-run overview can still be regenerated separately:
 
 ```sh
 uv run --with matplotlib --with seaborn python report/scripts/segment_comparison_draft.py

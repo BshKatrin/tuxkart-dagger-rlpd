@@ -54,7 +54,11 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("dist/study"))
     parser.add_argument("--root", type=Path, default=Path("runs/study-polar-four"))
     parser.add_argument("--monte-carlo", action="store_true", help="Package the completed five-case Monte Carlo diagnostic")
+    parser.add_argument("--reevaluation", action="store_true", help="Package completed 30-seed evaluations and report inputs")
     args = parser.parse_args()
+    if args.reevaluation:
+        package_reevaluation(args.output)
+        return
     if args.monte_carlo:
         package_monte_carlo(args.output)
         return
@@ -214,6 +218,65 @@ def package_monte_carlo(output):
     checksums = [(asset["sha256"], asset["name"]) for asset in assets] + [(sha256(path), path.name)]
     (output / "SHA256SUMS").write_text("".join(f"{checksum}  {name}\n" for checksum, name in checksums))
     print(json.dumps(validation), flush=True)
+
+
+def package_reevaluation(output):
+    """Preserve both supplemental collections and exact actors at original paths."""
+    output.mkdir(parents=True, exist_ok=False)
+    roots = [Path("runs/reevaluation-30-seeds-20261113"),
+             Path("runs/report-30-seeds-trajectories-20261113")]
+    actors, inventory = set(), []
+    for root in roots:
+        manifest = json.loads((root / "manifest.json").read_text())
+        if manifest["state"] != "completed" or len(manifest["jobs"]) != 16:
+            raise ValueError(f"Incomplete evaluation: {root}")
+        if manifest["evaluation_seeds"] != list(range(20000, 20030)):
+            raise ValueError("Expected 30 fixed evaluation seeds")
+        for job in manifest["jobs"]:
+            directory = root / job["name"]
+            status = json.loads((directory / "status.json").read_text())
+            if job["state"] != "completed" or status["status"] != "completed":
+                raise ValueError(f"Incomplete worker: {directory}")
+            records = [json.loads(line) for line in
+                       (directory / "evaluations.jsonl").read_text().splitlines()]
+            (record,) = records
+            expected = {(track, seed) for track in manifest["tracks"]
+                        for seed in manifest["evaluation_seeds"]}
+            actual = [(e["track"], e["seed"]) for e in record["episodes"]]
+            if len(actual) != len(expected) or set(actual) != expected:
+                raise ValueError(f"Missing or duplicate episodes: {directory}")
+            if job["name"] != "expert":
+                provenance = json.loads((directory / "provenance.json").read_text())
+                actor = Path(job["checkpoint"])
+                if sha256(actor) != provenance["sha256"]:
+                    raise ValueError(f"Actor changed: {actor}")
+                actors.add(actor.resolve().relative_to(Path.cwd()))
+            if manifest["trajectories"]:
+                for track in manifest["tracks"]:
+                    if not (directory / f"trajectories_{track}.npz").is_file():
+                        raise FileNotFoundError(directory / f"trajectories_{track}.npz")
+            inventory.append({"run": str(directory), "episodes": len(actual)})
+    groups = [("reevaluation-metrics.zip", sorted(roots[0].rglob("*"))),
+              ("report-trajectories.zip", sorted(roots[1].rglob("*"))),
+              ("reevaluation-inputs.zip", sorted(actors) + sorted(
+                  Path("report/generated/track-time-loss").rglob("geometry.json")) +
+               [Path("report/generated/track-time-loss/sources.json")])]
+    assets = [create_archive(output / name, [p for p in files if p.is_file()])
+              for name, files in groups]
+    description = {
+        "packaging_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True).strip(),
+        "packaging_script_sha256": sha256(Path(__file__)),
+        "runs": inventory, "assets": assets,
+        "extraction": "Extract all ZIPs at the repository root, preserving paths.",
+        "provenance": "Original manifests retain absolute paths. Included actors are restored at those same repository-relative paths; resolve historical paths relative to this checkout.",
+        "excluded": "Training replay, optimizers, videos, pilot runs and operational launch files.",
+    }
+    path = output / "artifact-manifest.json"
+    path.write_text(json.dumps(description, indent=2) + "\n")
+    checksums = [(a["sha256"], a["name"]) for a in assets] + [(sha256(path), path.name)]
+    (output / "SHA256SUMS").write_text(
+        "".join(f"{checksum}  {name}\n" for checksum, name in checksums))
 
 
 if __name__ == "__main__":

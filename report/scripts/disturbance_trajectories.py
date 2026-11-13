@@ -97,20 +97,44 @@ def unaided_path(row, trace, origin, seconds):
     return points, times, rescue, restore_point
 
 
+def forced_context(row, trace, origin):
+    """Disturbance onset and the shared executed forced-control path."""
+    forced = np.flatnonzero(trace["phase"] == "disturbance")
+    if not len(forced):
+        return None
+    positions = trace["world_position"][:, [0, 2]].astype(float) - origin
+    onset = np.asarray(row["anchor"]["position"])[[0, 2]] - origin
+    return {
+        "forced": np.vstack([onset, positions[forced]]),
+        "onset": onset,
+    }
+
+
 def plot_case(root, manifest, scenario_id, output, seconds):
     found, inputs = load_case(root, manifest, scenario_id)
     reference = found["expert", None][0]
     origin = np.asarray(reference["handover"]["position"])[[0, 2]]
     paths = {key: unaided_path(*value, origin, seconds) for key, value in found.items()}
+    context = forced_context(*found["expert", None], origin)
+    if context is not None:
+        stop = reference["handover_steps"]
+        for _, trace in found.values():
+            for field in ("world_position", "action", "phase", "elapsed_seconds"):
+                np.testing.assert_array_equal(
+                    trace[field][:stop], found["expert", None][1][field][:stop]
+                )
     # One shared crop per case, determined from the first five seconds of all
     # unaided responses. Later response segments may leave this fixed close-up.
-    focus = np.vstack([p[t <= 5] for p, t, _, _ in paths.values()])
+    focus_parts = [p[t <= 5] for p, t, _, _ in paths.values()]
+    if context is not None:
+        focus_parts.append(context["forced"])
+    focus = np.vstack(focus_parts)
     center = (focus.min(axis=0) + focus.max(axis=0)) / 2
     span = max(float(np.ptp(focus, axis=0).max()) + 16, 60)
     lower, upper = center - span / 2, center + span / 2
     # Trim empty vertical margins, retaining one common crop and equal physical
     # x/z scale for all five panels. This crops the map; it never stretches it.
-    points = np.vstack([p for p, _, _, _ in paths.values()])
+    points = np.vstack([focus, *(p for p, _, _, _ in paths.values())])
     visible = points[np.all((points >= lower) & (points <= upper), axis=1)]
     lower[1] = max(lower[1], float(visible[:, 1].min()) - 5)
     upper[1] = min(upper[1], float(visible[:, 1].max()) + 5)
@@ -129,13 +153,21 @@ def plot_case(root, manifest, scenario_id, output, seconds):
     panel_width = width * (right - left) / (5 + 4 * gap)
     panel_height = panel_width * (upper[1] - lower[1]) / (upper[0] - lower[0])
     header = 0.38
-    footer = 0.35 if reference["scenario"].get("control_delay") else 0.18
+    footer = 0.35
     height = panel_height + header + footer
     fig, axes = plt.subplots(1, 5, figsize=(width, height), sharex=True, sharey=True)
     for ax, method, label in zip(axes, METHODS, LABELS, strict=True):
         ax.add_collection(
             PolyCollection(quads, facecolors="#e8ecf0", edgecolors="none")
         )
+        if context is not None:
+            ax.plot(
+                *context["forced"].T,
+                color="#6c7680",
+                lw=1.1,
+                ls=(0, (1.1, 1.6)),
+                zorder=2,
+            )
         for seed, color, style in zip(range(3), colors, styles, strict=True):
             points, _, rescue, restored = paths[method, seed]
             ax.plot(*points.T, color=color, lw=1.0, ls=style, zorder=3)
@@ -167,7 +199,10 @@ def plot_case(root, manifest, scenario_id, output, seconds):
             ax.plot(
                 *restored, marker="D", ms=3, mfc="white", mec=ink, mew=0.8, zorder=5
             )
-        ax.plot(0, 0, marker="o", ms=3.5, mfc="white", mec=ink, mew=0.8, zorder=7)
+        initial = np.zeros(2) if context is None else context["onset"]
+        ax.plot(*initial, marker="o", ms=3.5, mfc="white", mec=ink, mew=0.8, zorder=7)
+        if context is not None:
+            ax.plot(0, 0, marker="D", ms=3, mfc="white", mec=ink, mew=0.8, zorder=7)
         ax.set(xlim=(lower[0], upper[0]), ylim=(lower[1], upper[1]), aspect="equal")
         ax.set_title(label, fontsize=8.5, pad=5)
         ax.set_axis_off()
@@ -188,7 +223,7 @@ def plot_case(root, manifest, scenario_id, output, seconds):
             label="Initial state",
         )
     )
-    if reference["scenario"].get("control_delay"):
+    if reference["scenario"].get("control_delay") or context is not None:
         handles.append(
             Line2D(
                 [],
@@ -201,12 +236,10 @@ def plot_case(root, manifest, scenario_id, output, seconds):
                 label="Controls restored",
             )
         )
-    if any(p[2] is not None for p in paths.values()):
-        handles.append(
-            Line2D(
-                [], [], color=ink, marker="X", ms=4.5, ls="none", label="Native rescue"
-            )
-        )
+    # Use the same event key in both figures, including cases without a rescue.
+    handles.append(
+        Line2D([], [], color=ink, marker="X", ms=4.5, ls="none", label="Native rescue")
+    )
     if len(handles) == 7:
         # Matplotlib fills legend columns first. Keep seeds 0/1/2 and expert
         # together on the first reading row, with event markers underneath.
@@ -249,7 +282,11 @@ def plot_case(root, manifest, scenario_id, output, seconds):
         "figure_size_inches": [width, height],
         "normal_control_window_seconds": seconds,
         "trajectory_rule": "From handover through 15 s of normal control, stopping before first native rescue; X marks last pre-rescue position. Lines are clipped by common spatial bounds.",
-        "restoration_markers": bool(reference["scenario"].get("control_delay")),
+        "forced_context": context is not None,
+        "context_rule": "Complete executed forced-control segment; circle marks onset and diamond marks restoration. Pre-perturbation approach is omitted. Legend is shared with the delayed-controls figure."
+        if context is not None
+        else None,
+        "restoration_markers": True,
         "native_quads_sha256": digest(quads_path),
         "inputs": inputs,
         "exports": {

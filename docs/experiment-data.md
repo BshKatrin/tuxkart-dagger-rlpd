@@ -100,3 +100,42 @@ Package a fresh snapshot without overwriting existing exports or ZIPs:
 ```sh
 uv run python scripts/package_results.py --monte-carlo --output dist/new-mc-snapshot
 ```
+
+## Supplemental 30-seed evaluations
+
+The [reevaluation-thirty-seeds-v1 release](https://github.com/BshKatrin/tuxkart-dagger-rlpd/releases/tag/reevaluation-thirty-seeds-v1)
+preserves two completed collections for five learned methods, training seeds
+0–2, and one shared expert, with evaluation seeds 20000–20029:
+
+- `reevaluation-metrics.zip`: 6,240 episodes on the original thirteen tracks,
+  including configurations, provenance, source snapshot, and per-track metrics.
+- `report-trajectories.zip`: 3,840 episodes and full trajectories on the eight
+  report tracks, including supplemental held-out Zen Garden.
+- `reevaluation-inputs.zip`: exact actor exports at their original repository-relative
+  paths and the report's road geometry and track selection.
+
+No earlier release is required to analyze these trajectories. Verify `SHA256SUMS`
+and extract all three ZIPs at the repository root. Original manifests preserve
+historical absolute paths; resolve those relative to the restored checkout when
+repeating evaluation. The inputs contain actor exports, not resumable training
+checkpoints. Earlier training and diagnostic releases remain unchanged.
+
+```sh
+gh release download reevaluation-thirty-seeds-v1 --dir dist/reevaluation-download
+(cd dist/reevaluation-download && shasum -a 256 -c SHA256SUMS)
+unzip -n dist/reevaluation-download/reevaluation-metrics.zip
+unzip -n dist/reevaluation-download/report-trajectories.zip
+unzip -n dist/reevaluation-download/reevaluation-inputs.zip
+uv run --with matplotlib --with seaborn python report/scripts/prepare_performance.py
+uv run --with matplotlib --with seaborn python report/scripts/performance_scorecards.py \
+  report/generated/performance-thirty-seeds/seed-metrics.json \
+  --output report/generated/performance-thirty-seeds --capped-time-bars
+uv run --with matplotlib --with seaborn python report/scripts/segment_comparison_draft.py --aggregate-training-seeds
+```
+
+The [supplemental protocol](protocols/reevaluation-thirty-seeds.md) defines the
+statistical units and the report's 150 s failure score. To package a fresh snapshot:
+
+```sh
+uv run python scripts/package_results.py --reevaluation --output dist/new-reevaluation-snapshot
+```

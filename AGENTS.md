@@ -1,119 +1,86 @@
-# Working on this project
+# Working on this repository
 
 This repository studies DAgger and RLPD for solo SuperTuxKart driving.
-[README.md](README.md) explains the research questions;
-[docs/study.md](docs/study.md) defines the study protocol.
+Read [README.md](README.md) for setup and usage and [docs/study.md](docs/study.md)
+for the research protocol before changing experimental behavior.
 
-## Working principles
+## Preserve the comparison
 
-- Keep the implementation small. Prefer extending existing code and tests over adding machinery.
-- Preserve comparable observations, controls, and evaluation conditions across methods.
-- Distinguish symmetric sampling from the additional RLPD components. Describe adaptations explicitly.
-- Keep executed actions separate from expert labels, and validation data out of training replay.
-- Treat independent training runs as the statistical unit. Always report completion beside conditional lap time.
-- Document experimental changes in the relevant study protocol; preserve the protocol used by completed runs. Keep the README about the project; put development guidance here.
-- Do not put live PIDs, runtime estimates, progress reports, or temporary plans in tracked documentation. Run artifacts record execution state.
+- Keep the implementation small. Extend existing code and meaningful tests.
+- Keep observations, controls, budgets, and evaluation conditions comparable.
+  Distinguish symmetric sampling from RLPD's additional components; document adaptations.
+- Keep executed actions separate from expert labels and validation data out of replay.
+- Average evaluations within each training run before comparing methods. Independent
+  training runs are the statistical unit. Always report completion beside conditional
+  lap time; identify whether variability describes training runs or evaluation seeds.
+- Inspect actual worker configurations and dataset metadata before interpreting results.
+  Partial or stopped runs are not completed experiments.
+- Preserve protocols and source snapshots used by completed runs. Record supplemental
+  experiments in a separate protocol, linked from the relevant study document.
 
-## Environment
+## Where to work
 
-Use Python 3.12 and `uv` for dependencies and commands:
+- `src/kartstudy/`: task wrapper, learning, evaluation, playback, and diagnostics.
+- `scripts/`: experiment launchers, summaries, and release packaging.
+- `report/scripts/`: analysis and figure generation; outputs go in ignored `report/generated/`.
+- `tests/`: learning semantics, terminal handling, data separation, statistical
+  accounting, and native simulator behavior.
 
-```sh
-uv sync --locked
-```
+Use Python 3.12 and `uv` for commands. Training explicitly requires PyTorch Metal
+(`mps`); simulation and rollout/evaluation inference use CPU. Keep one native
+simulator per worker process. Bound concurrent learners using measured throughput;
+more Metal processes do not necessarily train faster.
 
-Training uses PyTorch Metal (`mps`) explicitly; it errors if unavailable.
-Simulation and rollout/evaluation inference run on CPU. Keep one native simulator
-per worker process, rather than sharing it between threads. The simulator
-downloads its assets on first use. Limit concurrent learners based on measured
-throughput; more Metal processes do not necessarily train faster.
+Rescue telemetry uses a read-only native bridge for PySuperTuxKart2 0.7.4.
+First use downloads checksum-verified source headers and compiles with
+`xcrun clang++`. Generated files belong in ignored `runs/native-metrics/`.
+Rebuilds are keyed to the simulator binary and bridge source. Unsupported versions
+must fail explicitly rather than silently report zero rescues.
 
-Rescue telemetry uses a read-only native bridge against PySuperTuxKart2 0.7.4.
-First use downloads checksum-verified source headers and compiles the small bridge
-with Xcode Command Line Tools (`xcrun clang++`). Generated files stay in ignored
-`runs/native-metrics/`; the simulator and policy are not modified. Rebuild is keyed
-to the installed simulator binary and bridge source. Unsupported versions fail
-explicitly rather than silently reporting zero rescues.
-
-## Running experiments
-
-Qualify the expert before collecting data. The collector requires every lap to
-finish and refuses to overwrite an existing dataset.
-
-```sh
-uv run python scripts/qualify_expert.py --output runs/qualification-polar-four/metrics.json
-uv run python -m kartstudy.data --output data/team4-polar-four/demonstrations.npz
-uv run python scripts/run_suite.py --output runs/study-polar-four --workers 2
-```
-
-The suite launcher generates configurations, bounds concurrency, saves a source
-archive, and stops the queue if a worker fails. Use a fresh output directory
-for each suite. Inspect the actual worker configuration and dataset metadata
-before interpreting a result; the study protocol describes the intended comparison.
-
-```sh
-uv run python scripts/status.py runs/study-polar-four
-uv run python scripts/summarize.py runs/study-polar-four
-```
-
-Generated datasets and runs are Git-ignored. Dataset metadata records the split,
-expert provenance, and checksum. Each run records its configuration, resources,
-training/evaluation logs, final trajectories, and rolling checkpoint. The suite's
-`manifest.json` records worker PIDs and queue state. Summaries can include partial
-runs; restrict final analysis to completed runs at matched budgets.
-
-## Policy visualization
-
-`uv run python -m kartstudy.playback` opens the native viewer; see
-[docs/visualization.md](docs/visualization.md) for controls and recording.
-Playback uses the shared task wrapper and deterministic CPU inference at the
-original 0.1-second action interval. Speed controls affect wall time only.
-Keep Tk and the SDL/OpenGL simulator in separate processes on macOS; combining
-their Cocoa application objects in one process crashes. The viewer discovers
-completed checkpoints from run metadata. Outputs belong under ignored `runs/`.
-Fresh rendering can introduce tiny floating-point differences from headless
-evaluation. Preserve official evaluation logs; never replace them with video metadata.
-
-## Sharing experiment artifacts
-
-Keep `data/`, `runs/`, and `dist/` out of Git history. Publish completed snapshots
-as GitHub Release assets using `scripts/package_results.py`; restoration and
-archive contents are documented in [docs/experiment-data.md](docs/experiment-data.md).
-Preserve the original run files and source archive. Do not overwrite a published
-snapshot; use a new release tag for changed data.
+Keep Tk and SDL/OpenGL in separate processes on macOS: combining their Cocoa
+application objects crashes. Playback must use the shared task wrapper and
+CPU deterministic inference at the original 0.1-second action interval. Speed
+controls affect wall time only. Rendered replay may differ slightly from headless
+evaluation; never replace official logs with video metadata.
 
 ## Protect running work
 
-Do not overwrite datasets or change experiment code under an active suite:
-workers import code when they start, so queued jobs could otherwise use a
-different implementation from running jobs. Documentation edits are independent
-of training; preserve the suite's original source archive.
+Before editing experiment code, check for active suites. Workers import code when
+they start; queued jobs must not silently use a different implementation from
+running jobs. Do not overwrite datasets. Documentation changes are independent.
 
-To stop launching queued jobs while letting active workers finish:
+To stop queued launches while active workers finish, create `STOP` in the suite
+root. To stop active workers too, send SIGTERM only to the suite PID recorded in
+its manifest. Workers save at a safe boundary. Check individual `status.json`
+files afterward. Checkpoints retain model, optimizer, replay/labels, counters,
+and RNG state, but automatic resume is not implemented; rerun in a fresh directory.
 
-```sh
-touch runs/study-polar-four/STOP
-```
-
-To stop active workers too, send SIGTERM to the suite PID recorded in its
-manifest. Workers save at a safe boundary. Checkpoints contain model, optimizer,
-replay/labels, counters, and RNG state, but automatic training resume is not
-implemented. Check each worker's `status.json`; a stopped run is not a completed
-experiment. Rerun interrupted experiments in a fresh directory.
-
-For detached macOS runs, `caffeinate -i -w <suite PID>` inhibits idle sleep for
+For detached macOS jobs, `caffeinate -i -w <suite PID>` inhibits idle sleep for
 that process's lifetime. Closing the laptop can still suspend computation.
 
-## Verification
+## Verify changes
 
-Use focused checks while editing, and run the relevant existing tests before
-launching long jobs:
+Run focused checks while editing and the relevant existing tests before long jobs:
 
 ```sh
 uv run ruff check src scripts tests
 uv run pytest -q
 ```
 
-Tests should protect learning semantics, terminal handling, data separation,
-statistical accounting, and real simulator behavior. Extend existing tests when
-possible. Documentation-only edits need link/content checks, not training runs.
+Extend tests for meaningful behavior or plausible failures, not implementation
+mirrors. Check changed analysis scripts too. Documentation-only changes need
+link/content checks, not training runs.
+
+## Documentation and releases
+
+README serves readers: purpose, setup, usage, and routes to results. This file
+serves agents: constraints, verification, and implementation traps. Put scientific
+choices in the relevant protocol and artifact restoration in
+[docs/experiment-data.md](docs/experiment-data.md). Update affected guidance when
+behavior changes; avoid duplicate explanations and file-by-file implementation catalogs.
+
+Never commit live PIDs, estimates, progress reports, temporary plans, or generated
+artifacts. Execution state belongs in run artifacts. Keep `data/`, `runs/`, and
+`dist/` out of Git history. Publish completed, checksum-verified snapshots with
+`scripts/package_results.py`, preserving original run files and source archives.
+Use a new release tag for changed data; never overwrite a published snapshot.

@@ -91,6 +91,10 @@ components.
 
 ## Evaluation and reporting
 
+The separate [30-seed supplemental evaluation](protocols/reevaluation-thirty-seeds.md)
+extends final-checkpoint evaluation to completed training seeds 0–2; it preserves
+the original protocol below and its recorded results.
+
 Use deterministic CPU snapshots, four fixed evaluation seeds 20000–20003 per
 track. Evaluate training tracks every 40,000 online actions. Evaluate all 13
 study tracks at the fixed final budget; BC is evaluated after fitting. Held-out

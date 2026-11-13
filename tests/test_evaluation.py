@@ -253,6 +253,64 @@ class FakeEnv:
         )
 
 
+def test_reevaluation_requires_completed_unique_training_runs(tmp_path):
+    discover = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                 "scripts/reevaluate.py"))["discover"]
+    for name, status in (("finished", "completed"), ("interrupted", "stopped")):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "config.json").write_text(json.dumps({
+            "algo": "rlpd", "seed": 2, "schema_version": SCHEMA_VERSION}))
+        (directory / "status.json").write_text(json.dumps({"status": status}))
+        (directory / "actor.pt").touch()
+    jobs, excluded = discover([tmp_path])
+    assert [job["name"] for job in jobs] == ["rlpd_s2"]
+    assert len(excluded) == 1
+    with pytest.raises(ValueError, match="Duplicate"):
+        discover([tmp_path / "finished", tmp_path / "finished"])
+
+
+def test_report_capped_sd_uses_seed_averages_and_retains_failures(monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "report/scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    metrics = runpy.run_path(str(scripts / "prepare_performance.py"))["lap_metrics"]
+    def episode(seed, success, seconds):
+        return {"seed": seed, "success": success, "lap_time": seconds if success else None,
+                "sim_seconds": seconds, "timeout": not success,
+                "measurement_seconds": seconds, "off_track_seconds": 0, "rescue_count": 0}
+    row = metrics({"a": [episode(1, True, 10), episode(2, True, 30)],
+                   "b": [episode(1, True, 20), episode(2, False, 148)]}, [1, 2])
+    assert row["attempts"] == 4 and row["completed"] == 3
+    assert row["capped_by_seed"] == [15, 90]
+    assert row["capped"] == pytest.approx(52.5)
+    assert row["capped_sd"] == pytest.approx(np.std([15, 90], ddof=1))
+
+
+def test_segment_overview_weights_training_runs_equally(monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "report/scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    aggregate = runpy.run_path(str(scripts / "segment_comparison_draft.py"))[
+        "aggregate_training_runs"]
+    runs = []
+    for seed, (mean, pairs) in enumerate(((1, 2), (9, 1), (5, 1))):
+        estimate = {"mean": mean, "sd": 0}
+        segment = {"id": 0, "start": 0, "end": 20, "branch": False, "pairs": pairs,
+                   "gap": estimate, "speed_gap": estimate, "lateral_gap": estimate,
+                   "speed": {"expert": estimate, "rlpd": estimate},
+                   "lateral": {"expert": estimate, "rlpd": estimate}}
+        runs.append({"training_seed": seed, "track": "Test", "track_id": "test",
+                     "slug": "test", "method": "rlpd", "length": 20,
+                     "seeds": [1, 2], "paths": [], "context": [], "segments": [segment],
+                     "completed": pairs, "expert_completed": 2,
+                     "source_metadata": {}, "avg_compared": 1})
+    result = aggregate(runs)
+    assert result["segments"][0]["gap"]["mean"] == 5
+    assert result["segments"][0]["gap"]["sd"] == 4
+    assert result["segments"][0]["pairs_by_training_run"] == [2, 1, 1]
+    with pytest.raises(ValueError, match="Duplicate training seeds"):
+        aggregate([runs[0], runs[0]])
+
+
 class FakeActor(torch.nn.Module):
     def act(self, obs):
         assert not self.training

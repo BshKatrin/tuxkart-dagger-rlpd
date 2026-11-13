@@ -557,6 +557,7 @@ def reduce_local_sectors(policy_time, expert_time, speeds, offsets, lengths, usa
 
 def local_summary(args):
     metadata = json.loads((args.output / "sources.json").read_text())
+    seeds = metadata["seeds"]
     tracks = {}
     for track in metadata["tracks"]:
         track_id = track["id"]
@@ -579,7 +580,7 @@ def local_summary(args):
             records = {episode["seed"]: episode for episode in source["episodes"]}
             channels[method] = []
             with np.load(path) as data:
-                for seed in SEEDS:
+                for seed in seeds:
                     mask = data["seed"] == seed
                     progress = data["progress"][mask]
                     durations = first_passage_sectors(
@@ -628,7 +629,7 @@ def local_summary(args):
                 )
         tracks[track_id] = {"total_segments": len(lengths), "by_seed": rows}
         print(f"Local summaries: {track_id}", flush=True)
-    result = {"tracks": tracks, "groups": {}, "evaluation_seeds": list(SEEDS)}
+    result = {"tracks": tracks, "groups": {}, "evaluation_seeds": list(seeds)}
     for group in ("All tracks", "Training", "Held out"):
         selected = [
             track["id"]
