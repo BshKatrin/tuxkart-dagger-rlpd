@@ -8,6 +8,31 @@ symmetric sampling (SAC + SS), and RLPD in solo SuperTuxKart driving. The
 symmetric-sampling baseline separates the effect of mixing demonstrations and
 online experience from RLPD's additional critic components.
 
+## Five methods, one driving task
+
+![BC, DAgger, SAC, SAC + SS, and RLPD replayed in SuperTuxKart](docs/assets/readme/five-method-lighthouse.gif)
+
+![Policy colors: BC orange, DAgger blue, SAC red, SAC + SS purple, RLPD green](docs/assets/readme/method-colors.png)
+
+*Independent solo-lap replays on Lighthouse, a training track. Training seed 0;
+evaluation seed 20000; excerpt from race seconds 5–13 at real-time speed.
+This existing recording illustrates the viewer; it is separate from the
+30-seed results below.*
+
+## What transfers to new tracks?
+
+![Training and held-out completion across the five learned methods](docs/assets/readme/completion-by-split.png)
+
+RLPD has the highest mean completion on training tracks; DAgger has the highest
+on the held-out report tracks. Mixing demonstrations into SAC improves completion,
+but does not remove the transfer gap. The plot shows means and training-run
+min–max across three independent runs per method, with 30 evaluation seeds on
+each of four tracks per split.
+
+See the [30-seed evaluation and full metrics](https://github.com/BshKatrin/tuxkart-dagger-rlpd/releases/tag/reevaluation-thirty-seeds-v1)
+for lap times and driving diagnostics. [Figure provenance](docs/assets/readme/provenance.json)
+records the plotted values and recording hashes.
+
 ## The study
 
 Policies learn on four tracks and are evaluated on nine held-out tracks. All

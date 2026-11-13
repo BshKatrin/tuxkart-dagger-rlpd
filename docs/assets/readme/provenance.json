@@ -1,0 +1,187 @@
+{
+  "format_version": 1,
+  "results": {
+    "source": "Table 3 of the shared RL miniproject 2 report, PDF snapshot reviewed 2026-11-13.",
+    "report_url": "https://samskrift.com/project/e92dd17f-e446-45a3-86f4-070c4f285eda",
+    "report_pdf_sha256": "f1ae5f0232ed19d6fe2ab16910bdedfef376205fdfa638ab132f3e6eed5d75ae",
+    "report_text_sha256": "6909d8270de80bc93739625e21f59cc0b8dff93ea8443705e7d93b0afbee9810",
+    "release_url": "https://github.com/BshKatrin/tuxkart-dagger-rlpd/releases/tag/reevaluation-thirty-seeds-v1",
+    "release_data_asset": "report-trajectories.zip",
+    "protocol": "docs/protocols/reevaluation-thirty-seeds.md",
+    "training_seeds": [
+      0,
+      1,
+      2
+    ],
+    "evaluation_seeds": {
+      "first": 20000,
+      "last": 20029
+    },
+    "tracks": {
+      "train": [
+        "lighthouse",
+        "cornfield_crossing",
+        "black_forest",
+        "stk_enterprise"
+      ],
+      "held_out": [
+        "hacienda",
+        "snowmountain",
+        "ravenbridge_mansion",
+        "zengarden"
+      ]
+    },
+    "aggregation": "Mean and min-max across three independent training runs; each run averages 30 evaluation seeds on each of four tracks per split.",
+    "display_rounding_decimal_places": 1,
+    "completion_percent": {
+      "BC": [
+        87.2,
+        87.5
+      ],
+      "DAgger": [
+        90.6,
+        95.8
+      ],
+      "SAC": [
+        79.2,
+        40.0
+      ],
+      "SAC + SS": [
+        99.4,
+        66.4
+      ],
+      "RLPD": [
+        99.7,
+        79.2
+      ]
+    },
+    "training_run_ranges_percent": {
+      "BC": [
+        [
+          84.2,
+          92.5
+        ],
+        [
+          81.7,
+          90.8
+        ]
+      ],
+      "DAgger": [
+        [
+          87.5,
+          95.0
+        ],
+        [
+          90.0,
+          99.2
+        ]
+      ],
+      "SAC": [
+        [
+          72.5,
+          84.2
+        ],
+        [
+          25.0,
+          50.0
+        ]
+      ],
+      "SAC + SS": [
+        [
+          99.2,
+          100.0
+        ],
+        [
+          60.0,
+          75.0
+        ]
+      ],
+      "RLPD": [
+        [
+          99.2,
+          100.0
+        ],
+        [
+          70.8,
+          94.2
+        ]
+      ]
+    }
+  },
+  "recording": {
+    "presentation": "independent solo-lap replay",
+    "track": "lighthouse",
+    "split": "train",
+    "training_seed": 0,
+    "evaluation_seed": 20000,
+    "race_time_seconds": [
+      5,
+      13
+    ],
+    "playback_speed": 1,
+    "gif_frames_per_second": 8,
+    "source_video_sha256": "c0982b98111119d1d92f4d6e212c62325651c42bd38db8d15eecda8e177acb6c",
+    "capture_source_commit": "a03f0f0f855b3aa8e881c87005cdedae0ebdf9d5",
+    "capture_inputs_sha256": {
+      "bc.npz": "91dbf9a6ded77a47cd5d94b24f81dc6a35897c079ab78277d27e4d0e80e55036",
+      "dagger.npz": "369aa0d96f3f9c4a2cf72e5c4eb97a559220781053d4afb2842a810f13ee7381",
+      "manifest.json": "8ad1ecc5fecb24b1ec9305848601cf789ee48280cedc4fde82e27babf4eecdf8",
+      "rlpd.npz": "5b00615142dd73eb5207f786d46de9ccf537b5ab320a767d938a0ed7798c88f0",
+      "sac.npz": "8a122d4c01ff414ad12335d663a21f4bea3a8feb94dfeceda182e4e2512da984",
+      "sac_sym.npz": "53722bb3c14a99d5eac5fe2729cdf90266ee04cabdda50ccc7afa7e40489ef1d"
+    },
+    "actors": {
+      "bc": {
+        "method": "bc",
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "actor_sha256": "2264b91e3f0d14c1c86f6fe6ff12f1c4a97bacd29be3f8dcedcca6b6d121f1d4",
+        "actor_file_sha256": "dcbc48dd1361389703e16da7ba0776f075b71d9a6d1ee2392694b816d53927c9",
+        "checkpoint_step": 0,
+        "checkpoint_updates": 8000
+      },
+      "dagger": {
+        "method": "dagger",
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "actor_sha256": "3f874417be40eac45d6cc39097de0c390595e4a6a0a59028ebce24e21522ebcd",
+        "actor_file_sha256": "9defa86eaa8fd3241f84760870c3ddc6237534dac53948b973e10c23367a5a92",
+        "checkpoint_step": 400000,
+        "checkpoint_updates": 108000
+      },
+      "sac": {
+        "method": "sac",
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "actor_sha256": "8cf447089aa9ded572ec285914e2351741e4693611a563b1200b3949cfa7e8d0",
+        "actor_file_sha256": "1f0ba66f2fd8f2e027ff6be553cd376e7d489fbdd3492efe46bcc99d1fce2289",
+        "checkpoint_step": 400000,
+        "checkpoint_updates": 396032
+      },
+      "sac_sym": {
+        "method": "sac_sym",
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "actor_sha256": "e91a0141e92f9af7a77400512bc1797de88695a4e17590bfc8533fcfeebfa13d",
+        "actor_file_sha256": "8b9c81a2a13b6c454fea427448f5bdb140fb74c6586624a94ad58e0a9c6f194c",
+        "checkpoint_step": 400000,
+        "checkpoint_updates": 396032
+      },
+      "rlpd": {
+        "method": "rlpd",
+        "training_seed": 0,
+        "evaluation_seed": 20000,
+        "actor_sha256": "c5215fb4ecf661abec623bfaf75e0941c67bbfbfff184db8e1f47d0a89cb80fb",
+        "actor_file_sha256": "ba38dd3d76ae9d574a728938c98fac913dd159acf5850638393a7cf686c5508c",
+        "checkpoint_step": 400000,
+        "checkpoint_updates": 1584128
+      }
+    },
+    "limitation": "Illustrative seed-0 frozen actors; separate from the released 30-seed evaluations. Ghosts do not interact."
+  },
+  "assets_sha256": {
+    "method-colors.png": "b45c9b220af5a4db76f77d730acfdfc9c001c55a9033595aeba2616ba0b4e36e",
+    "five-method-lighthouse.gif": "8f7b52df4159c4aac9334bf5ca2e72f17ed36f71f21e22703024e43ad5c27713",
+    "completion-by-split.png": "a1b8111a8bf30c3f676282a8a39f6341d0f6c394ef8d9ff1ffc44746d26df298"
+  }
+}
